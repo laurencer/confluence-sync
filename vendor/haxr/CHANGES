@@ -1,0 +1,107 @@
+* 3000.12.1.1
+
+  - `>` is now escaped as `&gt;` when sending requests. Without this
+    some XML-RPC servers will break when receiving an embedded CDATA section
+    (i.e. Atlassian Confluence).
+
+* 3000.11.1.1 (21 July 2015)
+
+  - Bug fix: don't crash with empty URI port
+
+* 3000.11.1 (10 July 2015)
+
+  - Support both HTTP and HTTPS automatically, depending on URL.
+  - Bug fixes:
+    - read port properly
+    - set request path properly
+    - set content-length header
+
+* 3000.11 (1 June 2015)
+
+  - Switch from the HTTP package to http-streams, and add support for
+    HTTPS.  The types of a few of the internal methods may have
+    changed, but for the most part code depending on haxr should
+    continue to work unchanged.
+
+* 3000.10.4.2 (23 February 2015)
+
+  - add mtl-compat dependency
+
+* 3000.10.4.1 (22 February 2015)
+
+  - Fix build on GHC 7.4
+
+* 3000.10.4 (22 February 2015)
+
+  - Build on GHC 7.10
+  - allow HaXml 1.25
+  - allow blaze-builder-0.4
+
+* 3000.10.3.1 (5 September 2014)
+
+  - Update .cabal file to deal with network-uri split.
+
+* 3000.10.3 (18 June 2014)
+
+  - Parse unwrapped text as a String value in accordance with the
+    XML-RPC spec.
+
+* 3000.10.2 (30 January 2014)
+
+  - Adds support for i8 (64-bit integer) types: see new I8 type in
+    Network.XmlRpc.DTD_XMLRPC. Thanks to Jorge Peña for the patch.
+
+* 3000.10.1.1 (10 October 2013)
+
+  - fix build under GHC 7.4
+
+* 3000.10.1 (10 October 2013)
+
+  - Export XML conversion functions from Network.XmlRpc.Internals
+
+* 3000.10 (10 October 2013)
+
+  - Add an "unwrapped" value type that does not wrap the inner value
+    string with an XML element.  This should only affect users who
+    depend on Network.XmlRpc.Internals.
+
+* 3000.9.3 (18 May 2013)
+
+  - Critical bug fix --- do not use 3000.9.2, it is extremely broken
+    (hangs forever when trying to send a request).
+
+* 3000.9.2.1 (15 May 2013)
+
+  - Allow HaXml-1.24
+
+* 3000.9.2 (14 May 2013)
+
+  - Export new functions remoteWithHeaders and callWithHeaders, which
+    are variants of remote and call that allow the user to specify
+    extra custom headers.  Thanks to Ben Sinclair for the patch.
+
+* 3000.9.1 (4 May 2013)
+
+  - Expose Network.XmlRpc.DTD_XMLRPC from the library
+
+    The point is to allow converting to XML using functions from
+
+      http://hackage.haskell.org/packages/archive/HaXml/1.23.3/doc/html/Text-XML-HaXml-XmlContent.html
+
+    which allows for custom serialization of the XML to deal with
+    endpoints that don't parse XML correctly.
+
+* 3000.9.0.1 (7 July 2012)
+
+  - Make everything in examples/ directory compile again
+
+* 3000.9 (7 July 2012)
+
+  - Switch from dataenc to base64-bytestring for base64 encoding,
+    resulting in dramatically improved efficiency
+
+  - Change the argument type of ValueBase64 constructor from String to
+    ByteString
+
+  - bump HaXml dependency upper bound to allow HaXml 1.23.*
+

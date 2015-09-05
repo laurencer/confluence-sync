@@ -1,0 +1,73 @@
+Name: haxr
+Version: 3000.12.1.1
+Cabal-version: >=1.10
+Build-type: Simple
+Copyright: Bjorn Bringert, 2003-2006
+License: BSD3
+License-file: LICENSE
+Author: Bjorn Bringert <bjorn@bringert.net>
+Maintainer: Brent Yorgey <byorgey@gmail.com>
+Homepage: http://www.haskell.org/haskellwiki/HaXR
+Category: Network
+Synopsis: XML-RPC client and server library.
+Description:
+        HaXR is a library for writing XML-RPC
+        client and server applications in Haskell.
+
+Extra-Source-Files:
+        CHANGES
+        examples/make-stubs.hs        examples/parse_response.hs    examples/Person.hs
+        examples/PersonTH.hs          examples/person_client.hs     examples/person_server.hs
+        examples/raw_call.hs          examples/simple_client.hs     examples/simple_server.hs
+        examples/test_client.hs       examples/test_server.hs       examples/time-xmlrpc-com.hs
+        examples/validate.hs          examples/Makefile
+Bug-reports: https://github.com/byorgey/haxr/issues
+
+Source-repository head
+  type:     git
+  location: git://github.com/byorgey/haxr.git
+
+flag network-uri
+   description: Get Network.URI from the network-uri package
+   default: True
+
+Library
+  Build-depends: base < 5,
+                 base-compat >= 0.8 && < 0.9,
+                 mtl,
+                 mtl-compat,
+                 network < 2.7,
+                 http-streams,
+                 HsOpenSSL,
+                 io-streams,
+                 http-types,
+                 HaXml >= 1.22 && < 1.26,
+                 http-streams,
+                 bytestring,
+                 base64-bytestring,
+                 old-locale,
+                 old-time,
+                 time,
+                 array,
+                 utf8-string,
+                 template-haskell,
+                 blaze-builder >= 0.2 && < 0.5
+
+  if flag(network-uri)
+    build-depends: network-uri >= 2.6, network >= 2.6
+  else
+    build-depends: network-uri < 2.6, network < 2.6
+
+  Exposed-Modules:
+        Network.XmlRpc.Client,
+        Network.XmlRpc.Server,
+        Network.XmlRpc.Internals,
+        Network.XmlRpc.Introspect,
+        Network.XmlRpc.THDeriveXmlRpcType,
+        Network.XmlRpc.Pretty,
+        Network.XmlRpc.DTD_XMLRPC
+  Other-Modules:
+        Network.XmlRpc.Base64
+  Default-extensions: OverlappingInstances, TypeSynonymInstances, FlexibleInstances
+  Other-extensions: OverloadedStrings, GeneralizedNewtypeDeriving, TemplateHaskell
+  Default-language: Haskell2010

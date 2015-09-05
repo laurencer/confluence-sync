@@ -1,0 +1,69 @@
+name:                confluence-sync
+version:             0.1.0.0
+synopsis:            Tool for syncing static websites to confluence.
+description:         Please see README.md
+homepage:            http://github.com/githubuser/simple#readme
+license:             MIT
+license-file:        LICENSE
+author:              Laurence Rouesnel
+maintainer:          laurence@rouesnel.com
+copyright:           2015 Laurence Rouesnel
+category:            Web
+build-type:          Simple
+-- extra-source-files:
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     Confluence.Sync.SyncTool
+                     , Confluence.Sync.LocalFiles
+                     , Confluence.Sync.XmlRpc
+                     , Confluence.Sync.XmlRpc.Types
+  build-depends:       base >= 4.7 && < 5
+                     , bytestring
+                     , containers
+                     , cmark
+                     , cryptohash
+                     , HandsomeSoup
+                     , hxt
+                     , heredoc
+                     , mtl
+                     , MissingH
+                     , directory
+                     , filepath
+                     , haxr
+                     , text
+                     , time
+                     , template-haskell
+  default-language:    Haskell2010
+
+executable confluence-sync-exe
+  hs-source-dirs:      app
+  main-is:             Main.hs
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  build-depends:       base
+                     , confluence-sync
+  default-language:    Haskell2010
+
+test-suite confluence-sync-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  build-depends:       base
+                     , confluence-sync
+                     , process
+                     , network
+                     , random
+                     , HTTP
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  default-language:    Haskell2010
+
+test-suite confluence-sync-doctests
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             DocTests.hs
+  build-depends:       base
+                     , confluence-sync
+                     , doctest
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  default-language:    Haskell2010

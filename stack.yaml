@@ -1,0 +1,6 @@
+flags: {}
+packages:
+- '.'
+- 'vendor/haxr'
+extra-deps: []
+resolver: lts-3.2
