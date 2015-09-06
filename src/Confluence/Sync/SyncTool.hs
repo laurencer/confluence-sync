@@ -11,6 +11,9 @@ module Confluence.Sync.SyncTool (
 
 import           Prelude hiding (readFile)
 
+import           Control.Monad.Except
+import           Control.Monad.Reader
+
 import           Data.Char
 import           Data.String.Utils
 import           Data.List (intercalate)
@@ -19,14 +22,9 @@ import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
-
+import qualified Data.ByteString as BS
 import           Data.MIME.Types
 
-import           Control.Monad.Except
-import           Control.Monad.Reader
-
-
-import qualified Data.ByteString as BS
 import           Confluence.Sync.LocalFiles
 import           Confluence.Sync.XmlRpc (ApiCall)
 import qualified Confluence.Sync.XmlRpc as API

@@ -24,19 +24,19 @@ module Confluence.Sync.XmlRpc (
 , removeAttachment
 ) where
 
-import Data.ByteString
-import Data.Int
-import Data.Time.LocalTime
+import           Data.ByteString
+import           Data.Int
+import           Data.Time.LocalTime
 
-import Control.Exception
-import Control.Monad.Except
-import Control.Monad.Reader
+import           Control.Exception
+import           Control.Monad.Except
+import           Control.Monad.Reader
 
-import Network.XmlRpc.Client
-import Network.XmlRpc.Internals
+import           Network.XmlRpc.Client
+import           Network.XmlRpc.Internals
 
-import Confluence.Sync.XmlRpc.Types
-import Confluence.Sync.RateLimiter
+import           Confluence.Sync.XmlRpc.Types
+import           Confluence.Sync.RateLimiter
 
 type ConfluenceUrl      = String
 type Username           = String

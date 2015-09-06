@@ -35,6 +35,8 @@ import qualified Data.Set as Set
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 
+import qualified Network.URL as URL
+
 import           Text.XML.HXT.Core
 import           Text.HandsomeSoup
 import           Text.Heredoc
@@ -123,11 +125,12 @@ getAttachments :: FoundFile -> IO [ LocalAttachment ]
 getAttachments (file@FoundFile { fullPath, rootPath }) = do
   pageContents <- getPageAsRawHtml file
   references   <- findLocalAttachments pageContents
+  let decodePath path = maybe path id (URL.decString False path)
   let all = (flip fmap) references $ (\path ->
               let pathToAttachment = if (isPrefixOf "/" path) 
                                       then (rootPath </> (tail path))
                                       else ((takeDirectory fullPath) </> path)
-              in LocalAttachment (takeFileName path) path pathToAttachment (makeRelative rootPath pathToAttachment)
+              in LocalAttachment (takeFileName path) path (decodePath pathToAttachment) (decodePath (makeRelative rootPath pathToAttachment))
             )
   let validExtensions = Set.fromList [ ".pdf", ".jpeg", ".jpg", ".png", ".js", ".css" ]
       onlyValidExtensions LocalAttachment { localAttachmentName } = Set.member (map toLower (takeExtension (localAttachmentName))) validExtensions
