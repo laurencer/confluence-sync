@@ -127,7 +127,7 @@ getAttachments (file@FoundFile { fullPath, rootPath }) = do
   references   <- findLocalAttachments pageContents
   let decodePath path = maybe path id (URL.decString False path)
   let all = (flip fmap) references $ (\path ->
-              let pathToAttachment = if (isPrefixOf "/" path) 
+              let pathToAttachment = normalizePath $ if (isPrefixOf "/" path) 
                                       then (rootPath </> (tail path))
                                       else ((takeDirectory fullPath) </> path)
               in LocalAttachment (takeFileName path) path (decodePath pathToAttachment) (decodePath (makeRelative rootPath pathToAttachment))
