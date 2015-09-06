@@ -17,7 +17,7 @@ module Confluence.Sync.LocalFiles (
 , localAttachmentRemoteName
 ) where
 
-import           Control.Monad (forM)
+import           Control.Monad (forM, filterM)
 
 import           Crypto.Hash
 import           CMark
@@ -41,7 +41,7 @@ import           Text.XML.HXT.Core
 import           Text.HandsomeSoup
 import           Text.Heredoc
 
-import           System.Directory (doesDirectoryExist, getDirectoryContents)
+import           System.Directory (doesDirectoryExist, doesFileExist, getDirectoryContents)
 import           System.FilePath
 
 import           Confluence.Sync.XmlRpc.Types
@@ -134,7 +134,9 @@ getAttachments (file@FoundFile { fullPath, rootPath }) = do
             )
   let validExtensions = Set.fromList [ ".pdf", ".jpeg", ".jpg", ".png", ".js", ".css" ]
       onlyValidExtensions LocalAttachment { localAttachmentName } = Set.member (map toLower (takeExtension (localAttachmentName))) validExtensions
-  return $ filter onlyValidExtensions all
+      onlyAttachables = filter onlyValidExtensions all
+  
+  filterM (\la -> doesFileExist $ localAttachmentPath la) onlyAttachables
 
 -------------------------------------------------------------------------------
 -- Helper functions for rewriting site urls.
