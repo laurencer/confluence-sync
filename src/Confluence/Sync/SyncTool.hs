@@ -7,6 +7,7 @@
 module Confluence.Sync.SyncTool (
   sync
 , ConfluenceConfig(..)
+, confluenceXmlApi
 ) where
 
 import           Prelude hiding (readFile)
@@ -316,6 +317,6 @@ sync throttle config path = do
 
       ---
       liftIO $ putStrLn "Logging out of Confluence."
-      -- logout
+      Api.logout
       liftIO $ putStrLn "Logged out successfully."
   either (\err -> fail $ "ERROR: " ++ err) (\_ -> return ()) result
