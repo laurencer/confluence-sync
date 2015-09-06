@@ -27,7 +27,7 @@ import qualified Data.ByteString.Char8 as BSC
 
 import           Data.Char
 import           Data.String.Utils
-import           Data.List (intercalate, isPrefixOf, find, elem)
+import           Data.List (intercalate, isPrefixOf, find, elem, reverse, foldl')
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import           Data.Set (Set)
@@ -41,7 +41,7 @@ import           Text.XML.HXT.Core
 import           Text.HandsomeSoup
 import           Text.Heredoc
 
-import           System.Directory (doesDirectoryExist, doesFileExist, getDirectoryContents)
+import           System.Directory (doesDirectoryExist, doesFileExist, getDirectoryContents,)
 import           System.FilePath
 
 import           Confluence.Sync.XmlRpc.Types
@@ -197,16 +197,36 @@ fromLinkToPage :: [ (FoundFile, PageSummary) ] -> FoundFile -> SiteReference -> 
 fromLinkToPage pageMapping currentFile reference =
   let relativeToRootReference = if (isPrefixOf "/" reference) 
         then dropTrailingPathSeparator $ (tail reference)
-        else dropTrailingPathSeparator $ (joinPath $ (directories currentFile) ++ [ reference ])
+        else normalizePath $ dropTrailingPathSeparator $ (joinPath $ (directories currentFile) ++ [ reference ])
       searchPaths = if (hasExtension relativeToRootReference) 
-        then [ relativeToRootReference ]
-        else [ (relativeToRootReference </> "index.html"), (relativeToRootReference </> "index.htm") ]
+        then [ relativeToRootReference
+             , ((dropExtension relativeToRootReference) <.> "md")
+             , (dropExtension relativeToRootReference)
+             , ((dropExtension relativeToRootReference) <.> "markdown") ]
+        else [ (relativeToRootReference </> "index")
+             , (relativeToRootReference <.> ".html")
+             , (relativeToRootReference <.> ".htm")
+             , (relativeToRootReference <.> ".md")
+             , (relativeToRootReference <.> ".markdown")
+             , (relativeToRootReference </> "index.html")
+             , (relativeToRootReference </> "index.md")
+             , (relativeToRootReference </> "index.htm")
+             , (relativeToRootReference </> "index.markdown") ]
       normalizedSearchPaths = fmap lowerCase searchPaths
       normalizedRelativeToRoot file = lowerCase $ makeRelative (rootPath file) (fullPath file)
       maybeFileAndSummary = find (\(ff, ps) -> (normalizedRelativeToRoot ff) `elem` normalizedSearchPaths) pageMapping
   in (\(ff, ps) -> pageSummaryUrl ps) <$> maybeFileAndSummary
 
-
+normalizePath :: FilePath -> FilePath
+normalizePath path = 
+  foldl' (</>) "" (filter (/= "./") (reverse (recurseParent components)))
+  where components = reverse (splitPath path)
+        safeTail []     = []
+        safeTail (x:xs) = xs
+        recurseParent []     = []
+        recurseParent (x:xs) = if (x == "../")
+                          then (recurseParent (safeTail xs))
+                          else x : (recurseParent xs) 
 -------------------------------------------------------------------------------
 -- Asset parsing/replacing (with attachments)
 -------------------------------------------------------------------------------
