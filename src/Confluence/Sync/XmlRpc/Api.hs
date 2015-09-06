@@ -5,7 +5,7 @@
 {-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Confluence.Sync.XmlRpc (
+module Confluence.Sync.XmlRpc.Api (
   login
 , logout
 

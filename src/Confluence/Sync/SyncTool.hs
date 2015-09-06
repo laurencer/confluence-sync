@@ -26,7 +26,7 @@ import qualified Data.ByteString as BS
 import           Data.MIME.Types
 
 import           Confluence.Sync.LocalFiles
-import qualified Confluence.Sync.XmlRpc as API
+import qualified Confluence.Sync.XmlRpc.Api as Api
 import           Confluence.Sync.XmlRpc.Types
 import           Confluence.Sync.XmlRpc.Requests (ApiCall, runApiCall)
 import           Confluence.Sync.RateLimiter
@@ -47,7 +47,7 @@ generatePageName suffix file =
   (intercalate " / " pagePath) ++ " - " ++ suffix
   where pagePath = map prettyName ((directories file) ++ [ friendlyName file ])
 
--- Address of the XML-RPC API root
+-- Address of the XML-RPC Api root
 confluenceXmlApi :: ConfluenceConfig -> String 
 confluenceXmlApi config = (confluenceUrl config) ++ "/rpc/xmlrpc"
 
@@ -61,7 +61,7 @@ createRootPage (ConfluenceConfig { syncSpaceKey, syncTitle }) = do
     , newPagePermissions  = Nothing
   }
   liftIO . putStrLn $ "Creating new root page (\"" ++ syncTitle ++ "\") for synchronization (in space \"" ++ syncSpaceKey ++ "\")"
-  newPage <- API.createPage newRootPage
+  newPage <- Api.createPage newRootPage
   liftIO . putStrLn $ "Root page (\"" ++ syncTitle ++ "\") successfully created (in space \"" ++ syncSpaceKey ++  "\"): page id = " ++ (show $ pageId newPage) ++ ", url = " ++ (show $ pageUrl newPage)
   return newPage
 
@@ -70,7 +70,7 @@ createOrFindPage (config@ConfluenceConfig { syncSpaceKey, syncTitle }) = do
   liftIO . putStrLn $ "No page id provided - looking up page \"" ++ syncTitle ++ "\" in \"" ++ syncSpaceKey ++ "\""
   findPage `catchError` (\_ -> createTheRootPage)
   where findPage = do
-          page <- (API.getPageByName syncSpaceKey syncTitle)
+          page <- (Api.getPageByName syncSpaceKey syncTitle)
           liftIO . putStrLn $ "Found root page (by name lookup): page id = " ++ (show $ pageId page) ++ ", url = " ++ (show $ pageUrl page)
           return page
         createTheRootPage = do
@@ -108,7 +108,7 @@ createOrFindMetaPage (config@ConfluenceConfig { syncSpaceKey }) (rootPage@Page {
   return page
   where pageTitle = metaPageName config
         findPage = do
-          page <- (API.getPageByName syncSpaceKey pageTitle)
+          page <- (Api.getPageByName syncSpaceKey pageTitle)
           liftIO . putStrLn $ "Found meta page (by name lookup): page id = " ++ (show $ pageId page) ++ ", url = " ++ (show $ pageUrl page)
           return page
         createMetaPage = do
@@ -121,7 +121,7 @@ createOrFindMetaPage (config@ConfluenceConfig { syncSpaceKey }) (rootPage@Page {
             , newPagePermissions  = Nothing
           }
           liftIO . putStrLn $ "Creating new meta page (\"" ++ pageTitle ++ "\") for synchronization (in space \"" ++ syncSpaceKey ++ "\")"
-          newPage <- API.createPage newMetaPage
+          newPage <- Api.createPage newMetaPage
           liftIO . putStrLn $ "Meta page (\"" ++ pageTitle ++ "\") successfully created (in space \"" ++ syncSpaceKey ++  "\"): page id = " ++ (show $ pageId newPage) ++ ", url = " ++ (show $ pageUrl newPage)
           return newPage
 
@@ -141,7 +141,7 @@ createOrFindMetaTrashPage (config@ConfluenceConfig { syncSpaceKey }) (metaPage@P
   return page
   where pageTitle = metaTrashPageName config
         findPage = do
-          page <- (API.getPageByName syncSpaceKey pageTitle)
+          page <- (Api.getPageByName syncSpaceKey pageTitle)
           liftIO . putStrLn $ "Found trash page (by name lookup): page id = " ++ (show $ pageId page) ++ ", url = " ++ (show $ pageUrl page)
           return page
         createTrashPage = do
@@ -154,7 +154,7 @@ createOrFindMetaTrashPage (config@ConfluenceConfig { syncSpaceKey }) (metaPage@P
             , newPagePermissions  = Nothing
           }
           liftIO . putStrLn $ "Creating new trash page (\"" ++ pageTitle ++ "\") for synchronization (in space \"" ++ syncSpaceKey ++ "\")"
-          newPage <- API.createPage newMetaPage
+          newPage <- Api.createPage newMetaPage
           liftIO . putStrLn $ "Trash page (\"" ++ pageTitle ++ "\") successfully created (in space \"" ++ syncSpaceKey ++  "\"): page id = " ++ (show $ pageId newPage) ++ ", url = " ++ (show $ pageUrl newPage)
           return newPage
 
@@ -174,16 +174,16 @@ createContentPage (Page { pageId = rootPageId, pageSpace }) title file = do
     , newPagePermissions  = Nothing
   }
   liftIO . putStrLn $ "Synchronizing - creating page \"" ++ title ++ "\" (\"" ++ (fullPath file) ++ "\")"
-  page <- API.createPage newPage
+  page <- Api.createPage newPage
   liftIO . putStrLn $ "Synchronizing - created page \"" ++ title ++ "\" (\"" ++ (pageUrl page) ++ "\")"
   return page
 
 updateContentPage :: Page -> PageSummary -> FoundFile -> [ (FoundFile, PageSummary) ] -> ApiCall Page
 updateContentPage (rootPage@Page { pageId = rootPageId }) (PageSummary { pageSummaryId = pageId, pageSummaryTitle = title }) file pageMappings = do
   !foo <- liftIO . putStrLn $ "Synchronizing - updating page \"" ++ title ++ "\" (\"" ++ (fullPath file) ++ "\")"
-  page <- API.getPage pageId
+  page <- Api.getPage pageId
   localAttachments  <- liftIO $ getAttachments file
-  remoteAttachments <- API.getAttachments pageId
+  remoteAttachments <- Api.getAttachments pageId
   attachmentMapping <- syncAttachments pageId localAttachments remoteAttachments
 
   localContents <- liftIO $ getPageContents file attachmentMapping pageMappings
@@ -192,7 +192,7 @@ updateContentPage (rootPage@Page { pageId = rootPageId }) (PageSummary { pageSum
    then liftIO . putStrLn $ "Synchronizing - page \"" ++ title ++ "\" is identical to the local copy."
    else do
       liftIO . putStrLn $ "Synchronizing - page \"" ++ title ++ "\" is different and requires updating."
-      API.storePage updatedPage
+      Api.storePage updatedPage
       liftIO . putStrLn $ "Synchronizing - page \"" ++ title ++ "\" update successfully: " ++ (pageUrl page)
   return page
 
@@ -225,7 +225,7 @@ syncAttachments pageId localAttachments remoteAttachments = do
   forM (Set.toList toRemove) $ (\attachmentName -> do
     let attachment = nameToRemote Map.! attachmentName
     liftIO $ putStrLn $ "Removing attachment " ++ attachmentName
-    API.removeAttachment (attachmentPageId attachment) attachmentName
+    Api.removeAttachment (attachmentPageId attachment) attachmentName
     liftIO $ putStrLn $ "Attachment removed: " ++ attachmentName
     )
 
@@ -235,7 +235,7 @@ syncAttachments pageId localAttachments remoteAttachments = do
     contents <- liftIO $ BS.readFile (localAttachmentPath local)
     let (mimeTypeGuess, encodingGuess) = guessType defaultmtd False attachmentName
     let contentType = maybe "application/unknown" id mimeTypeGuess
-    remote <- API.addAttachment pageId (NewAttachment attachmentName contentType) contents
+    remote <- Api.addAttachment pageId (NewAttachment attachmentName contentType) contents
     liftIO $ putStrLn $ "Attachment added: " ++ attachmentName
     return $ (local, remote)
     )
@@ -252,8 +252,8 @@ syncAttachments pageId localAttachments remoteAttachments = do
 trashContentPage :: Page -> PageSummary -> ApiCall Page
 trashContentPage (trashPage@Page { pageId = trashPageId }) (PageSummary { pageSummaryId = pageId, pageSummaryTitle = title }) = do
   liftIO . putStrLn $ "Synchronizing - trashing page \"" ++ title ++ "\""
-  page <- API.getPage pageId
-  API.storePage page { pageContent = "This page has been deleted and is no longer available.", pageParentId = trashPageId}
+  page <- Api.getPage pageId
+  Api.storePage page { pageContent = "This page has been deleted and is no longer available.", pageParentId = trashPageId}
   liftIO . putStrLn $ "Synchronizing - page \"" ++ title ++ "\" has been moved to the trash successfully: " ++ (pageUrl page)
   return page
 
@@ -270,17 +270,17 @@ sync throttle config path = do
   let localTitles = Set.fromList $ map fst localPagesWithTitles
 
   putStrLn "Logging into Confluence"
-  token <- API.login (confluenceXmlApi config) (user config) (password config)
+  token <- Api.login (confluenceXmlApi config) (user config) (password config)
   putStrLn $ "Successfully logged into Confluence: token = " ++ token
 
   result <- runApiCall throttle (confluenceXmlApi config) token $ do
       rootPage <- case (syncPageId config) of
-                    Just pageId -> API.getPage pageId
+                    Just pageId -> Api.getPage pageId
                     Nothing     -> createOrFindPage config
       -- Create/find the meta pages.
       (metaPage, trashPage) <- createMetaPages config rootPage
       -- Now we have the root page get the descendants.
-      descendants <- API.getDescendents (pageId rootPage)
+      descendants <- Api.getDescendents (pageId rootPage)
       let remotePages = filter (\p -> not $ (isMetaPage config) (pageSummaryTitle p)) descendants
       let remoteTitles = map pageSummaryTitle remotePages
       let titleToRemotePage = Map.fromList $ zip remoteTitles remotePages

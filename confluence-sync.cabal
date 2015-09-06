@@ -18,7 +18,7 @@ library
   exposed-modules:     Confluence.Sync.SyncTool
                      , Confluence.Sync.LocalFiles
                      , Confluence.Sync.RateLimiter
-                     , Confluence.Sync.XmlRpc
+                     , Confluence.Sync.XmlRpc.Api
                      , Confluence.Sync.XmlRpc.Types
                      , Confluence.Sync.XmlRpc.Requests
   build-depends:       base >= 4.7 && < 5
