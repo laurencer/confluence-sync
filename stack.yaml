@@ -2,5 +2,5 @@ flags: {}
 packages:
 - '.'
 - 'vendor/haxr'
-extra-deps: []
+extra-deps: [ "doctest-0.10.0" ]
 resolver: lts-3.2
