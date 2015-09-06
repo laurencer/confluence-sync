@@ -11,14 +11,13 @@ module Confluence.Sync.XmlRpc.Types (
 , NewAttachment(..)
 ) where
 
-import Prelude hiding (id)
+import           Prelude hiding (id)
 
-import Data.Maybe
-import Data.Int
+import           Data.Int
+import           Data.Maybe
+import           Data.Time.LocalTime
 
-import Data.Time.LocalTime
-
-import Network.XmlRpc.Internals
+import           Network.XmlRpc.Internals
 
 data NewPage = NewPage {
   newPageSpace :: String
