@@ -282,8 +282,6 @@ sync throttle config path = do
       -- Now we have the root page get the descendants.
       descendants <- Api.getDescendents (pageId rootPage)
       let remotePages = filter (\p -> not $ (isMetaPage config) (pageSummaryTitle p)) descendants
-      let remoteTitles = map pageSummaryTitle remotePages
-      let titleToRemotePage = Map.fromList $ zip remoteTitles remotePages
       let remoteTitles = Set.fromList $ map pageSummaryTitle remotePages
       let allTitles = (localTitles `Set.union` remoteTitles)
       let titlesAlreadyDeleted = Set.fromList $ map pageSummaryTitle (filter (\p -> (pageSummaryParentId p) == (pageId trashPage)) remotePages)
