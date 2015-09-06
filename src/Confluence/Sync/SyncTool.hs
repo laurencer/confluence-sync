@@ -9,21 +9,21 @@ module Confluence.Sync.SyncTool (
 , ConfluenceConfig(..)
 ) where
 
-import Prelude hiding (readFile)
+import           Prelude hiding (readFile)
 
-import Data.Char
-import Data.String.Utils
-import Data.List (intercalate)
+import           Data.Char
+import           Data.String.Utils
+import           Data.List (intercalate)
 import qualified Data.Map.Strict as Map
-import Data.Set (Set)
+import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
-import Data.MIME.Types
+import           Data.MIME.Types
 
-import Control.Monad.Except
-import Control.Monad.Reader
+import           Control.Monad.Except
+import           Control.Monad.Reader
 
 
 import qualified Data.ByteString as BS
@@ -31,6 +31,7 @@ import           Confluence.Sync.LocalFiles
 import           Confluence.Sync.XmlRpc (ApiCall)
 import qualified Confluence.Sync.XmlRpc as API
 import           Confluence.Sync.XmlRpc.Types
+import           Confluence.Sync.RateLimiter
 
 data ConfluenceConfig = ConfluenceConfig {
   user          :: String
@@ -262,8 +263,8 @@ trashContentPage (trashPage@Page { pageId = trashPageId }) (PageSummary { pageSu
 -- Sync implementation.
 -------------------------------------------------------------------------------
 
-sync :: ConfluenceConfig -> FilePath -> IO ()
-sync config path = do
+sync :: Throttle -> ConfluenceConfig -> FilePath -> IO ()
+sync throttle config path = do
   files <- findFilesInDirectory path
   let localPages = filter isPage files
   let localPagesWithTitles = zip (map (generatePageName (syncTitle config)) localPages) localPages
@@ -274,7 +275,7 @@ sync config path = do
   token <- API.login (confluenceXmlApi config) (user config) (password config)
   putStrLn $ "Successfully logged into Confluence: token = " ++ token
 
-  result <- API.runApiCall (confluenceXmlApi config) token $ do
+  result <- API.runApiCall throttle (confluenceXmlApi config) token $ do
       rootPage <- case (syncPageId config) of
                     Just pageId -> API.getPage pageId
                     Nothing     -> createOrFindPage config
@@ -308,7 +309,7 @@ sync config path = do
       -- Create all the placeholder pages first.
       createdPages <- sequence $ map (\title -> createContentPage rootPage title (titleToLocalPage Map.! title)) (Set.toList titlesToCreate)
       let createdPageSummaries = pageSummaryFromPage <$> createdPages
-      
+
       -- This is the complete list of all possible pages (this is used for updating/creating links between pages).
       let allRemotePages = remotePages ++ createdPageSummaries
       let allRemotePagesMap = Map.fromList $ zip (map pageSummaryTitle allRemotePages) allRemotePages

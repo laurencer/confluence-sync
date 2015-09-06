@@ -1,5 +1,5 @@
 name:                confluence-sync
-version:             0.1.0.0
+version:             0.2.0.0
 synopsis:            Tool for syncing static websites to confluence.
 description:         Please see README.md
 homepage:            http://github.com/githubuser/simple#readme
@@ -17,32 +17,39 @@ library
   hs-source-dirs:      src
   exposed-modules:     Confluence.Sync.SyncTool
                      , Confluence.Sync.LocalFiles
+                     , Confluence.Sync.RateLimiter
                      , Confluence.Sync.XmlRpc
                      , Confluence.Sync.XmlRpc.Types
   build-depends:       base >= 4.7 && < 5
                      , bytestring
                      , containers
                      , cmark
+                     , clock
                      , cryptohash
                      , HandsomeSoup
                      , hxt
                      , heredoc
                      , mtl
+                     , stm
+                     , SafeSemaphore
                      , MissingH
                      , directory
                      , filepath
                      , haxr
                      , text
                      , time
+                     , transformers
                      , template-haskell
   default-language:    Haskell2010
 
-executable confluence-sync-exe
+executable confluence-sync-tool
   hs-source-dirs:      app
   main-is:             Main.hs
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base
                      , confluence-sync
+                     , optparse-applicative
+                     , heredoc
   default-language:    Haskell2010
 
 test-suite confluence-sync-test
