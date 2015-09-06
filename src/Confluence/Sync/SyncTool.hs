@@ -26,9 +26,9 @@ import qualified Data.ByteString as BS
 import           Data.MIME.Types
 
 import           Confluence.Sync.LocalFiles
-import           Confluence.Sync.XmlRpc (ApiCall)
 import qualified Confluence.Sync.XmlRpc as API
 import           Confluence.Sync.XmlRpc.Types
+import           Confluence.Sync.XmlRpc.Requests (ApiCall, runApiCall)
 import           Confluence.Sync.RateLimiter
 
 data ConfluenceConfig = ConfluenceConfig {
@@ -273,7 +273,7 @@ sync throttle config path = do
   token <- API.login (confluenceXmlApi config) (user config) (password config)
   putStrLn $ "Successfully logged into Confluence: token = " ++ token
 
-  result <- API.runApiCall throttle (confluenceXmlApi config) token $ do
+  result <- runApiCall throttle (confluenceXmlApi config) token $ do
       rootPage <- case (syncPageId config) of
                     Just pageId -> API.getPage pageId
                     Nothing     -> createOrFindPage config

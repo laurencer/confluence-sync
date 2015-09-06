@@ -20,6 +20,7 @@ library
                      , Confluence.Sync.RateLimiter
                      , Confluence.Sync.XmlRpc
                      , Confluence.Sync.XmlRpc.Types
+                     , Confluence.Sync.XmlRpc.Requests
   build-depends:       base >= 4.7 && < 5
                      , bytestring
                      , containers
