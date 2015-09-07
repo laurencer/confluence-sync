@@ -1,5 +1,5 @@
 name:                confluence-sync
-version:             0.2.0.0
+version:             0.2.1.0
 synopsis:            Tool for syncing static websites to confluence.
 description:         Please see README.md
 homepage:            http://github.com/githubuser/simple#readme

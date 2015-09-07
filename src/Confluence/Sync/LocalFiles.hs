@@ -145,7 +145,7 @@ getAttachments (file@FoundFile { fullPath, rootPath }) = do
 getPageAsRawHtml :: FoundFile -> IO T.Text
 getPageAsRawHtml (file@FoundFile { fullPath }) =
   if (isHtmlPage file) then (TIO.readFile fullPath)
-    else if (isMarkdownPage file) then (\html -> T.append githubCss html) <$> (commonmarkToHtml [optSafe, optSmart]) <$> (TIO.readFile fullPath)
+    else if (isMarkdownPage file) then (\html -> wrapMarkdownHtml html) <$> (commonmarkToHtml [optSafe, optSmart]) <$> (TIO.readFile fullPath)
     else return ""
 
 getPageContents :: FoundFile -> [ (LocalAttachment, Attachment) ] -> [ (FoundFile, PageSummary) ] -> IO String
@@ -296,8 +296,15 @@ findFilesInDirectory root =
           return (concat found)
 
 -------------------------------------------------------------------------------
--- GitHub CSS Style.
+-- Markdown HTML Wrapping.
 -------------------------------------------------------------------------------
+
+-- | Wraps the Markdown generated output in a proper HTML page
+--
+-- Without this - Confluence doesn't IFrame the content and the CSS styles apply
+-- to the entire page.
+wrapMarkdownHtml :: T.Text -> T.Text
+wrapMarkdownHtml content = "<html><head>" `mappend` githubCss `mappend` "</head><body>" `mappend` content `mappend` "</body></html>"
 
 githubCss = [here|
 <style>
