@@ -65,9 +65,13 @@ Confluence Sync Tool is written in Haskell. To get started install [Stack](https
 - **Run tests:** `stack test`
 - **To run the executable:** `stack build && stack exec confluence-sync-tool`
 
+Some of the integration tests require an instance of Confluence to be running. See the *Sandbox/Dev Environment* section below on how to set this up. You also need to set some environment variables - see `bin/setup-test-environment.sh` for an example.
+
 ## Sandbox/Dev Environment
 
-See the [sandbox](sandbox/README.md) for information on how to create a Docker Confluence Sandbox.
+See the [sandbox](sandbox/README.md) for information on how to create a Docker Confluence Sandbox. You can also use a pre-baked docker image: `laurencer/confluence-sync-sandbox:latest`.
+
+You can get started by running: `docker run --publish 8090:8090 laurencer/confluence-sync-sandbox` and then `open http://$(docker-machine ip dev):8090/`. The username and password are both `admin`.
 
 ## FAQ
 

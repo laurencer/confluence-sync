@@ -4,232 +4,125 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE ExtendedDefaultRules #-}
 
-module Confluence.Sync.LocalFiles (
-  FoundFile(..)
-, LocalAttachment(..)
-, isPage
-, findFilesInDirectory
-, friendlyName
-, prettyName
-, getPageContents
-, getAttachments
-, localAttachmentRemoteName
-) where
+module Confluence.Sync.Content where
 
-import           Control.Monad (forM, filterM)
-
-import           Crypto.Hash
 import           CMark
 
-import qualified Data.ByteString.Lazy as LBS
-import qualified Data.ByteString.Char8 as BSC
-
 import           Data.Char
-import           Data.String.Utils
-import           Data.List (intercalate, isPrefixOf, find, elem, reverse, foldl')
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
-import           Data.Set (Set)
-import qualified Data.Set as Set
+import           Data.List
+import           Data.Maybe
 import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
+import           Data.Set (Set)
+import qualified Data.Set as Set
+import           Data.String.Utils (replace)
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
+import           Data.Tree
+import           Data.Tree.Zipper
 
-import qualified Network.URL as URL
+import           Data.CaseInsensitive  ( CI )
+import qualified Data.CaseInsensitive as CI
 
 import           Text.XML.HXT.Core
 import           Text.HandsomeSoup
 import           Text.Heredoc
+import           Text.InterpolatedString.Perl6 (qq)
 
-import           System.Directory (doesDirectoryExist, doesFileExist, getDirectoryContents,)
+import           System.Directory
 import           System.FilePath
 
+import           Confluence.Sync.LocalSite
+import           Confluence.Sync.ReferenceResolver
 import           Confluence.Sync.XmlRpc.Types
+import           Confluence.Sync.Internal.AttachmentHash
 
--------------------------------------------------------------------------------
--- General Local File Handling.
--------------------------------------------------------------------------------
+getPageAsRawHtml :: ConfluenceZipper -> IO T.Text
+getPageAsRawHtml zipper = 
+  let siteFile  = label <$> (pageSource . pagePosition . label $ zipper)
+  in case siteFile of
+    -- This will occur if a directory has child pages BUT no page for itself (e.g. a README)
+    Nothing   -> return ""
+    Just file -> let 
+      path      = filePath file
+      pageType  = getPageType file
+      source    = TIO.readFile path
+      in case pageType of
+        Just HtmlPage      -> source
+        Just MarkdownPage  -> wrapMarkdownHtml <$> (commonmarkToHtml [optSafe, optSmart]) <$> source
+        Nothing            -> return ""
 
-data FoundFile = FoundFile {
-  -- File name (including extension).
-  name        :: String
-  -- Full path to the file.
-, fullPath    :: FilePath
-  -- The path to this directory relative to the root of the site.
-, directories :: [ String ]
-  -- Root of the sync directory.
-, rootPath    :: FilePath
-} deriving Show
+data PageType = HtmlPage | MarkdownPage
 
-isPage :: FoundFile -> Bool
-isPage f = (isMarkdownPage f) || (isHtmlPage f)
+getPageType :: SiteFile -> Maybe PageType
+getPageType file = 
+  if (hasA htmlExtensions) then Just HtmlPage
+    else if (hasA markdownExtensions) then Just MarkdownPage
+      else Nothing
+  where lowercaseExtension = (map toLower (takeExtension (filePath file)))
+        hasA exts = Set.member lowercaseExtension exts
+        markdownExtensions = Set.fromList [ ".md", ".markdown" ]
+        htmlExtensions = Set.fromList [ ".html", ".htm" ]
 
-isMarkdownPage :: FoundFile -> Bool
-isMarkdownPage file = Set.member (map toLower (takeExtension (name file))) markdownExtensions
-  where markdownExtensions = Set.fromList [ ".md", ".markdown" ]
 
-isHtmlPage :: FoundFile -> Bool
-isHtmlPage file = Set.member (map toLower (takeExtension (name file))) htmlExtensions
-  where htmlExtensions = Set.fromList [ ".html", ".htm" ]
-
-friendlyName :: FoundFile -> String
-friendlyName file = prettyName $ dropExtension (name file)
-
--- Takes a filename and makes into something which is nice for page titles.
--- This involves replacing special characters and capitalising each word.
-prettyName :: String -> String
-prettyName string = 
-  (unwords . map capitaliseWord . words) $ (foldr replaceCharacter string [
-      ("-", " ")
-    , ("_", " ")
-  ])
-  where replaceCharacter :: (String, String) -> String -> String
-        replaceCharacter (needle, replaced) str = replace needle replaced str
-        capitaliseWord :: String -> String
-        capitaliseWord [] = []
-        capitaliseWord (c : cs) = toUpper c : map toLower cs
+getPageContents :: ConfluenceZipper -> [ (LocalAttachment, Attachment) ] -> IO String
+getPageContents zipper attachmentMapping = 
+  wrapHtml <$> ((getPageAsRawHtml zipper) >>= processAttachments >>= processLinks)
+  where processAttachments = rewriteAttachmentReferences referenceToUrl
+          where referenceToUrl = Map.fromList $ fmap (\(l, r) -> ((localReference l), (attachmentUrl r))) attachmentMapping
+        processLinks = rewriteLinks zipper
+        wrapHtml :: String -> String
+        wrapHtml contents = concat [ infoBox, prefix, contents, suffix ]
+          where prefix = "<ac:macro ac:name='html'><ac:plain-text-body><![CDATA["
+                suffix = "]]></ac:plain-text-body></ac:macro>"
+          
 
 -------------------------------------------------------------------------------
 -- Local Attachment Handling.
 -------------------------------------------------------------------------------
 
 data LocalAttachment = LocalAttachment {
-  -- Filename of the attachment.
-  localAttachmentName  :: String
   -- How it is referenced in the document (e.g. what path is used to refer to it)
-, localReference       :: String
-  -- Actual path to file contents on disk.
-, localAttachmentPath  :: FilePath
-  -- Path relative to the sync root.
-, attachmentRelativePath  :: FilePath
-}
+  localReference       :: String
+  -- Actual resolved path
+, resolvedAttachment   :: SiteFileZipper
+  -- How it should be referred to remotely.
+, attachmentRemoteName :: String
+} deriving (Show, Eq)
 
 -- Generates the filename of the attachment in Confluence
-localAttachmentRemoteName :: LocalAttachment -> IO String
-localAttachmentRemoteName local = do
-  hash <- attachmentHash local
-  let relative = attachmentRelativePath local
+localAttachmentRemoteName :: SiteFileZipper -> IO String
+localAttachmentRemoteName zipper = do
+  hash <- attachmentHash zipper
+  let relative = takeFileName . filePath . label $ zipper
   let extension = takeExtension relative
   let baseName = dropExtension relative
   let safeName = replace "/" "_" (replace "_" "__" baseName)
   return $ safeName ++ "_" ++ hash ++ extension
 
-attachmentHash :: LocalAttachment -> IO String
-attachmentHash LocalAttachment { localAttachmentPath } = do
-  contents <- LBS.readFile localAttachmentPath
-  return . BSC.unpack $ digestToHexByteString $ md5 contents
-  where md5 :: LBS.ByteString -> Digest MD5
-        md5 = hashlazy
+mkAttachment :: ConfluenceZipper -> String -> IO (Maybe LocalAttachment)
+mkAttachment zipper reference = do
+  let validExtensions = Set.fromList $ map CI.mk [ ".pdf", ".jpeg", ".jpg", ".png", ".js", ".css" ]
+  case resolvePageAttachment zipper reference of
+    Nothing       -> return Nothing
+    Just resolved ->
+      let resolvedPath = filePath . label $ resolved
+          extension    = CI.mk . takeExtension $ resolvedPath
+      in if (Set.member extension validExtensions) 
+            then (\rn -> Just $ LocalAttachment reference resolved rn) <$> (localAttachmentRemoteName resolved)
+            else return Nothing
 
-getAttachments :: FoundFile -> IO [ LocalAttachment ]
-getAttachments (file@FoundFile { fullPath, rootPath }) = do
-  pageContents <- getPageAsRawHtml file
+getAttachments :: ConfluenceZipper -> IO [ LocalAttachment ]
+getAttachments zipper = do
+  pageContents <- getPageAsRawHtml zipper
   references   <- findLocalAttachments pageContents
-  let decodePath path = maybe path id (URL.decString False path)
-  let all = (flip fmap) references $ (\path ->
-              let pathToAttachment = normalizePath $ if (isPrefixOf "/" path) 
-                                      then (rootPath </> (tail path))
-                                      else ((takeDirectory fullPath) </> path)
-              in LocalAttachment (takeFileName path) path (decodePath pathToAttachment) (decodePath (makeRelative rootPath pathToAttachment))
-            )
-  let validExtensions = Set.fromList [ ".pdf", ".jpeg", ".jpg", ".png", ".js", ".css" ]
-      onlyValidExtensions LocalAttachment { localAttachmentName } = Set.member (map toLower (takeExtension (localAttachmentName))) validExtensions
-      onlyAttachables = filter onlyValidExtensions all
-  
-  filterM (\la -> doesFileExist $ localAttachmentPath la) onlyAttachables
-
--------------------------------------------------------------------------------
--- Helper functions for rewriting site urls.
--------------------------------------------------------------------------------
-
-getPageAsRawHtml :: FoundFile -> IO T.Text
-getPageAsRawHtml (file@FoundFile { fullPath }) =
-  if (isHtmlPage file) then (TIO.readFile fullPath)
-    else if (isMarkdownPage file) then (\html -> wrapMarkdownHtml html) <$> (commonmarkToHtml [optSafe, optSmart]) <$> (TIO.readFile fullPath)
-    else return ""
-
-getPageContents :: FoundFile -> [ (LocalAttachment, Attachment) ] -> [ (FoundFile, PageSummary) ] -> IO String
-getPageContents (file@FoundFile { fullPath }) attachmentMapping pageMapping = 
-  if (isHtmlPage file) then htmlContent
-    else if (isMarkdownPage file) then markdownContent
-    else return ""
-  where htmlContent     = wrapHtml <$> ((getPageAsRawHtml file) >>= processAttachments >>= processLinks)
-        markdownContent = wrapHtml <$> ((getPageAsRawHtml file) >>= processAttachments >>= processLinks)
-        processLinks = rewriteLinks pageMapping file
-        processAttachments = rewriteAttachmentReferences referenceToUrl
-          where referenceToUrl = Map.fromList $ fmap (\(l, r) -> ((localReference l), (attachmentUrl r))) attachmentMapping
-        wrapHtml :: String -> String
-        wrapHtml contents = concat [ prefix, contents, suffix ]
-          where prefix = "<ac:macro ac:name='html'><ac:plain-text-body><![CDATA["
-                suffix = "]]></ac:plain-text-body></ac:macro>"
-          
--------------------------------------------------------------------------------
--- Helper functions for rewriting site urls.
--------------------------------------------------------------------------------
+  catMaybes <$> (sequence $ map (mkAttachment zipper) references)
 
 type SiteReference = String
 type AttachmentUrl = String
 type LinkedPageUrl = String
-
-lowerCase str = map toLower str
-notDataUri uri = not (isPrefixOf "data:" (lowerCase uri))
-notExternalUri uri = not ((isPrefixOf "http:" (lowerCase uri)) || (isPrefixOf "https:" (lowerCase uri)))
-isSiteUri uri = (notDataUri uri) && (notExternalUri uri)
-modifyAttribute name f = changeAttrValue f `when` hasName name
-
--------------------------------------------------------------------------------
--- Link rewriting
--------------------------------------------------------------------------------
-
-rewriteLinks :: [ (FoundFile, PageSummary) ] -> FoundFile -> String -> IO String
-rewriteLinks pageMapping file html =
-  let doc = readString [withParseHTML yes, withWarnings no] $ html
-      isSiteLink = isElem >>> hasName "a" >>> hasAttr "href" >>> getAttrValue "href" >>> isA isSiteUri
-      findPage = fromLinkToPage pageMapping file
-      updateReference reference = maybe reference id (findPage reference)
-      replaceLinks = processAttrl (modifyAttribute "href" updateReference) `when` isSiteLink
-      parseAndReplace = runX $ doc >>> 
-        processTopDown replaceLinks
-        >>> writeDocumentToString [ withOutputEncoding isoLatin1 ]
-  in concat <$> parseAndReplace
-
-fromLinkToPage :: [ (FoundFile, PageSummary) ] -> FoundFile -> SiteReference -> Maybe LinkedPageUrl
-fromLinkToPage pageMapping currentFile reference =
-  let relativeToRootReference = if (isPrefixOf "/" reference) 
-        then dropTrailingPathSeparator $ (tail reference)
-        else normalizePath $ dropTrailingPathSeparator $ (joinPath $ (directories currentFile) ++ [ reference ])
-      searchPaths = if (hasExtension relativeToRootReference) 
-        then [ relativeToRootReference
-             , ((dropExtension relativeToRootReference) <.> "md")
-             , (dropExtension relativeToRootReference)
-             , ((dropExtension relativeToRootReference) <.> "markdown") ]
-        else [ (relativeToRootReference </> "index")
-             , (relativeToRootReference <.> ".html")
-             , (relativeToRootReference <.> ".htm")
-             , (relativeToRootReference <.> ".md")
-             , (relativeToRootReference <.> ".markdown")
-             , (relativeToRootReference </> "index.html")
-             , (relativeToRootReference </> "index.md")
-             , (relativeToRootReference </> "index.htm")
-             , (relativeToRootReference </> "index.markdown") ]
-      normalizedSearchPaths = fmap lowerCase searchPaths
-      normalizedRelativeToRoot file = lowerCase $ makeRelative (rootPath file) (fullPath file)
-      maybeFileAndSummary = find (\(ff, ps) -> (normalizedRelativeToRoot ff) `elem` normalizedSearchPaths) pageMapping
-  in (\(ff, ps) -> pageSummaryUrl ps) <$> maybeFileAndSummary
-
-normalizePath :: FilePath -> FilePath
-normalizePath path = 
-  foldl' (</>) "" (filter (/= "./") (reverse (recurseParent components)))
-  where components = reverse (splitPath path)
-        safeTail []     = []
-        safeTail (x:xs) = xs
-        recurseParent []     = []
-        recurseParent (x:xs) = if (x == "../")
-                          then (recurseParent (safeTail xs))
-                          else x : (recurseParent xs) 
--------------------------------------------------------------------------------
--- Asset parsing/replacing (with attachments)
--------------------------------------------------------------------------------
 
 -- | Finds all files referenced in the page that need to be attached to it.
 --   For example, this includes images and PDFs.
@@ -271,29 +164,43 @@ rewriteAttachmentReferences referenceToUrl html =
   in concat <$> parseAndReplace
 
 -------------------------------------------------------------------------------
--- Find files to sync.
+-- Link rewriting
 -------------------------------------------------------------------------------
 
--- Recurses through a directory and finds files to sync.
-findFilesInDirectory :: FilePath -> IO [FoundFile]
-findFilesInDirectory root = 
-  recurse [] root
-  where recurse directories current = do
-          -- Get contents of the directory
-          names <- getDirectoryContents current
-          -- Only select actual files/folders
-          let properNames = filter (`notElem` [".", ".."]) names
-          -- Iterate through the list of files.
-          found <- forM properNames $ \name -> do
-            -- Construct the full path to the file.
-            let fullPath = current </> name
-            -- Check whether it is a directory.
-            isDirectory <- doesDirectoryExist fullPath
-            if isDirectory
-              -- Recurse on any directory we find (add the directory to the hirearchy.)
-              then recurse (name : directories) fullPath
-              else return [ (FoundFile name fullPath (reverse directories) root) ]
-          return (concat found)
+rewriteLinks :: ConfluenceZipper -> String -> IO String
+rewriteLinks zipper html =
+  let doc = readString [withParseHTML yes, withWarnings no] $ html
+      isSiteLink = isElem >>> hasName "a" >>> hasAttr "href" >>> getAttrValue "href" >>> isA isSiteUri
+      findPage ref = (pageSummaryUrl . remotePage . label) <$> (resolvePageLink zipper ref)
+      updateReference reference = maybe reference id (findPage reference)
+      replaceLinks = processAttrl (modifyAttribute "href" updateReference) `when` isSiteLink
+      parseAndReplace = runX $ doc >>> 
+        processTopDown replaceLinks
+        >>> writeDocumentToString [ withOutputEncoding isoLatin1 ]
+  in concat <$> parseAndReplace
+
+-------------------------------------------------------------------------------
+-- Parsing helpers.
+-------------------------------------------------------------------------------
+
+lowerCase str = map toLower str
+notDataUri uri = not (isPrefixOf "data:" (lowerCase uri))
+notExternalUri uri = not ((isPrefixOf "http:" (lowerCase uri)) || (isPrefixOf "https:" (lowerCase uri)))
+isSiteUri uri = (notDataUri uri) && (notExternalUri uri)
+modifyAttribute name f = changeAttrValue f `when` hasName name
+
+-------------------------------------------------------------------------------
+-- Infobox Message
+-------------------------------------------------------------------------------
+
+infoBox = [qq|
+<ac:structured-macro ac:name="info">
+  <ac:rich-text-body>
+    <p>This page is automatically generated. Please do not manually edit. </p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+|]
+
 
 -------------------------------------------------------------------------------
 -- Markdown HTML Wrapping.

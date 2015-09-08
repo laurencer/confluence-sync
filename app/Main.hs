@@ -9,7 +9,7 @@ import           Text.Heredoc (here)
 import           System.Environment
 
 import           Confluence.Sync.SyncTool
-import           Confluence.Sync.RateLimiter
+import           Confluence.Sync.Internal.RateLimiter
 
 data CommandLineArguments = CommandLineArguments {
   argsSpaceKey        :: String

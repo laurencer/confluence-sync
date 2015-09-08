@@ -112,7 +112,7 @@ data PageSummary = PageSummary {
 , pageSummaryTitle :: String
 , pageSummaryUrl :: String
 , pageSummaryPermissions :: String
-  } deriving Show
+  } deriving (Show, Eq)
 
 pageSummaryFromPage :: Page -> PageSummary
 pageSummaryFromPage p = PageSummary { .. }

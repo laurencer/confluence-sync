@@ -3,13 +3,14 @@
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 module Confluence.Sync.SyncTool (
   sync
 , ConfluenceConfig(..)
 , confluenceXmlApi
 ) where
-
+import Debug.Trace
 import           Prelude hiding (readFile)
 
 import           Control.Monad.Except
@@ -19,18 +20,27 @@ import           Data.Char
 import           Data.String.Utils
 import           Data.List (intercalate)
 import qualified Data.Map.Strict as Map
+import           Data.Maybe
 import           Data.Set (Set)
 import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
+import           Data.Tree.Zipper
 import qualified Data.ByteString as BS
 import           Data.MIME.Types
 
-import           Confluence.Sync.LocalFiles
+import           System.FilePath
+
+import           Text.Heredoc
+
+import           Confluence.Sync.LocalSite
+import           Confluence.Sync.Content
+import           Confluence.Sync.ReferenceResolver
+
 import qualified Confluence.Sync.XmlRpc.Api as Api
 import           Confluence.Sync.XmlRpc.Types
 import           Confluence.Sync.XmlRpc.Requests (ApiCall, runApiCall)
-import           Confluence.Sync.RateLimiter
+import           Confluence.Sync.Internal.RateLimiter
 
 data ConfluenceConfig = ConfluenceConfig {
   user          :: String
@@ -42,11 +52,6 @@ data ConfluenceConfig = ConfluenceConfig {
 , syncSpaceKey  :: String
 , syncPageId    :: Maybe String
 } deriving Show
-
-generatePageName :: String -> FoundFile -> String
-generatePageName suffix file = 
-  (intercalate " / " pagePath) ++ " - " ++ suffix
-  where pagePath = map prettyName ((directories file) ++ [ friendlyName file ])
 
 -- Address of the XML-RPC Api root
 confluenceXmlApi :: ConfluenceConfig -> String 
@@ -165,30 +170,34 @@ createOrFindMetaTrashPage (config@ConfluenceConfig { syncSpaceKey }) (metaPage@P
 
 -- | Creates placeholder pages for all new pages to be created.
 --   These pages will be subsequently updated below.
-createContentPage :: Page -> String -> FoundFile -> ApiCall Page
-createContentPage (Page { pageId = rootPageId, pageSpace }) title file = do
+createContentPage :: Page -> String -> ApiCall Page
+createContentPage (Page { pageId = rootPageId, pageSpace }) title = do
   let newPage = NewPage { 
       newPageSpace        = pageSpace
     , newPageParentId     = Just rootPageId
     , newPageTitle        = title
-    , newPageContent      = "Placeholder page - currently synchronizing - will be replaced with proper contents soon."
+    , newPageContent      = newPagePlaceholderMessage
     , newPagePermissions  = Nothing
   }
-  liftIO . putStrLn $ "Synchronizing - creating page \"" ++ title ++ "\" (\"" ++ (fullPath file) ++ "\")"
+  liftIO . putStrLn $ "Synchronizing - creating page \"" ++ title ++ "\""
   page <- Api.createPage newPage
   liftIO . putStrLn $ "Synchronizing - created page \"" ++ title ++ "\" (\"" ++ (pageUrl page) ++ "\")"
   return page
 
-updateContentPage :: Page -> PageSummary -> FoundFile -> [ (FoundFile, PageSummary) ] -> ApiCall Page
-updateContentPage (rootPage@Page { pageId = rootPageId }) (PageSummary { pageSummaryId = pageId, pageSummaryTitle = title }) file pageMappings = do
-  !foo <- liftIO . putStrLn $ "Synchronizing - updating page \"" ++ title ++ "\" (\"" ++ (fullPath file) ++ "\")"
-  page <- Api.getPage pageId
-  localAttachments  <- liftIO $ getAttachments file
+updateContentPage :: ConfluenceZipper -> ApiCall Page
+updateContentPage zipper = do
+  let pageSummary   = remotePage . label $ zipper
+      pageId        = pageSummaryId pageSummary
+      title         = pageSummaryTitle pageSummary
+      fullPath      = maybe "<root>" id $ (filePath . label) <$> (pageSource . pagePosition . label $ zipper)
+      parentPageId  = maybe (pageSummaryParentId pageSummary) id ((pageSummaryId . remotePage . label) <$> (parent zipper))
+  liftIO . putStrLn $ "Synchronizing - updating page \"" ++ title ++ "\" (\"" ++ fullPath ++ "\")"
+  page              <- Api.getPage pageId
+  localAttachments  <- liftIO $ getAttachments zipper
   remoteAttachments <- Api.getAttachments pageId
   attachmentMapping <- syncAttachments pageId localAttachments remoteAttachments
-
-  localContents <- liftIO $ getPageContents file attachmentMapping pageMappings
-  let updatedPage = page { pageContent = localContents, pageParentId = rootPageId}
+  localContents <- liftIO $ getPageContents zipper attachmentMapping
+  let updatedPage = page { pageContent = localContents, pageParentId = parentPageId}
   if (page == updatedPage)
    then liftIO . putStrLn $ "Synchronizing - page \"" ++ title ++ "\" is identical to the local copy."
    else do
@@ -199,9 +208,7 @@ updateContentPage (rootPage@Page { pageId = rootPageId }) (PageSummary { pageSum
 
 syncAttachments :: String -> [ LocalAttachment ] -> [ Attachment ] -> ApiCall [ (LocalAttachment, Attachment) ]
 syncAttachments pageId localAttachments remoteAttachments = do
-  -- Attachments are stored in Confluence with a content hash as part of the filename
-  -- We need to calculate what the remote names should be.
-  localRemoteNames <- liftIO $ sequence (fmap localAttachmentRemoteName localAttachments)
+  let localRemoteNames = map attachmentRemoteName localAttachments
   let localRemotesNamesWithLocals = zip localRemoteNames localAttachments
   let nameToLocal = Map.fromList $ localRemotesNamesWithLocals
   let nameToRemote = Map.fromList $ zip (fmap attachmentFileName remoteAttachments) remoteAttachments
@@ -233,7 +240,7 @@ syncAttachments pageId localAttachments remoteAttachments = do
   added <- forM (Set.toList toAdd) $ (\attachmentName -> do
     let local = nameToLocal Map.! attachmentName
     liftIO $ putStrLn $ "Adding attachment " ++ attachmentName
-    contents <- liftIO $ BS.readFile (localAttachmentPath local)
+    contents <- liftIO $ BS.readFile (filePath . label . resolvedAttachment $  local)
     let (mimeTypeGuess, encodingGuess) = guessType defaultmtd False attachmentName
     let contentType = maybe "application/unknown" id mimeTypeGuess
     remote <- Api.addAttachment pageId (NewAttachment attachmentName contentType) contents
@@ -254,9 +261,29 @@ trashContentPage :: Page -> PageSummary -> ApiCall Page
 trashContentPage (trashPage@Page { pageId = trashPageId }) (PageSummary { pageSummaryId = pageId, pageSummaryTitle = title }) = do
   liftIO . putStrLn $ "Synchronizing - trashing page \"" ++ title ++ "\""
   page <- Api.getPage pageId
-  Api.storePage page { pageContent = "This page has been deleted and is no longer available.", pageParentId = trashPageId}
+  Api.storePage page { pageContent = deletedPageMessage, pageParentId = trashPageId}
   liftIO . putStrLn $ "Synchronizing - page \"" ++ title ++ "\" has been moved to the trash successfully: " ++ (pageUrl page)
   return page
+
+-------------------------------------------------------------------------------
+-- Sync Messages
+-------------------------------------------------------------------------------
+
+newPagePlaceholderMessage = [here|
+<ac:structured-macro ac:name="info">
+  <ac:rich-text-body>
+    <p>This page is currently being synchronized - please check back again soon.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+|]
+
+deletedPageMessage = [here|
+<ac:structured-macro ac:name="info">
+  <ac:rich-text-body>
+    <p>This page has been deleted and is no longer available.</p>
+  </ac:rich-text-body>
+</ac:structured-macro>
+|]
 
 -------------------------------------------------------------------------------
 -- Sync implementation.
@@ -264,9 +291,11 @@ trashContentPage (trashPage@Page { pageId = trashPageId }) (PageSummary { pageSu
 
 sync :: Throttle -> ConfluenceConfig -> FilePath -> IO ()
 sync throttle config path = do
-  files <- findFilesInDirectory path
-  let localPages = filter isPage files
-  let localPagesWithTitles = zip (map (generatePageName (syncTitle config)) localPages) localPages
+  siteTree       <- buildSiteTree path
+  let pageTree    = buildPageTree siteTree
+  let pageZipper  = fromTree pageTree
+  let localPages  = filter (notShadowReference . label) (traverseZipper pageZipper)
+  let localPagesWithTitles = zip (map (pageName (syncTitle config)) localPages) localPages
   let titleToLocalPage = Map.fromList localPagesWithTitles
   let localTitles = Set.fromList $ map fst localPagesWithTitles
 
@@ -283,7 +312,7 @@ sync throttle config path = do
       -- Now we have the root page get the descendants.
       descendants <- Api.getDescendents (pageId rootPage)
       let remotePages = filter (\p -> not $ (isMetaPage config) (pageSummaryTitle p)) descendants
-      let remoteTitles = Set.fromList $ map pageSummaryTitle remotePages
+      let remoteTitles = Set.fromList $ (syncTitle config) : (map pageSummaryTitle remotePages)
       let allTitles = (localTitles `Set.union` remoteTitles)
       let titlesAlreadyDeleted = Set.fromList $ map pageSummaryTitle (filter (\p -> (pageSummaryParentId p) == (pageId trashPage)) remotePages)
 
@@ -304,15 +333,19 @@ sync throttle config path = do
       liftIO $ putStrLn ""
 
       -- Create all the placeholder pages first.
-      createdPages <- sequence $ map (\title -> createContentPage rootPage title (titleToLocalPage Map.! title)) (Set.toList titlesToCreate)
+      createdPages <- sequence $ map (\title -> createContentPage rootPage title) (Set.toList titlesToCreate)
       let createdPageSummaries = pageSummaryFromPage <$> createdPages
 
       -- This is the complete list of all possible pages (this is used for updating/creating links between pages).
-      let allRemotePages = remotePages ++ createdPageSummaries
+      -- The root page is added in here because it will have the same name as the root directory page.
+      let allRemotePages = remotePages ++ createdPageSummaries ++ [ (pageSummaryFromPage rootPage) ]
       let allRemotePagesMap = Map.fromList $ zip (map pageSummaryTitle allRemotePages) allRemotePages
-      let localPagesMappedToRemotePages = fmap (\(title, localPage) -> (localPage, (allRemotePagesMap Map.! title))) localPagesWithTitles
+      let localToRemoteLookup local = Map.findWithDefault (error $ "Could not find remote page for local file - expected \"" ++ (pageName (syncTitle config) local) ++ "\":" ++ show local) (pageName (syncTitle config) local) allRemotePagesMap
+        
+      let syncTree = pageTreeToSyncTree pageZipper localToRemoteLookup
+      let syncZipper = fromTree syncTree
 
-      sequence $ map (\title -> updateContentPage rootPage (allRemotePagesMap Map.! title) (titleToLocalPage Map.! title) localPagesMappedToRemotePages) (Set.toList titlesToUpdate)
+      sequence $ map updateContentPage (filter (notShadowReference . pagePosition . label) (traverseZipper syncZipper))
       sequence $ map (\title -> trashContentPage trashPage (allRemotePagesMap Map.! title)) (Set.toList titlesToRemove)
 
       ---

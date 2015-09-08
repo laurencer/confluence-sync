@@ -1,0 +1,195 @@
+{-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE ExtendedDefaultRules #-}
+
+module Confluence.Sync.LocalSite where
+
+import           Control.Applicative
+
+import           Data.Char
+import           Data.List
+import           Data.Maybe
+import           Data.Set (Set)
+import qualified Data.Set as Set
+import           Data.String.Utils (replace)
+import           Data.Tree
+import           Data.Tree.Zipper
+
+import           Data.CaseInsensitive  ( CI )
+import qualified Data.CaseInsensitive as CI
+
+import           System.Directory
+import           System.FilePath
+
+import           Confluence.Sync.XmlRpc.Types
+
+-------------------------------------------------------------------------------
+-- Site Tree.
+-------------------------------------------------------------------------------
+
+-- | Tree of all the local files that comprise the site to sync.
+type SiteTree = Tree SiteFile
+
+type SiteFileZipper = TreePos Full SiteFile
+
+data SiteFile = SiteFile {
+  -- Absolute path to the location.
+  filePath    :: FilePath
+, isDirectory :: Bool
+} deriving (Eq, Show)
+
+-- | Builds a site tree from the root element.
+buildSiteTree :: FilePath -> IO SiteTree
+buildSiteTree root = do 
+  unfoldTreeM buildTree root
+  where listDirectory :: FilePath -> IO ([ FilePath ])
+        listDirectory dir = do
+          relativeContents    <- (filter (`notElem` [".", ".."])) <$> (getDirectoryContents dir)
+          let withoutHidden    = filter (\p -> not $ "." `isPrefixOf` p) relativeContents
+          let absoluteContents = map (dir </>) withoutHidden
+          return absoluteContents
+        buildTree :: FilePath -> IO (SiteFile, [ FilePath ])
+        buildTree filePath = do
+          isDirectory <- doesDirectoryExist filePath
+          children    <- if (isDirectory) then listDirectory filePath else return []
+          return $ (SiteFile { .. }, children)
+
+--  | True if the file represents content that can be converted to a Confluence page.
+isSiteFileAPage :: SiteFile -> Bool
+isSiteFileAPage SiteFile { filePath } = Set.member (CI.mk . takeExtension $ filePath) lowercasePageExtensions
+
+-- | List of valid extensions for pages (all lower-case).
+lowercasePageExtensions = Set.fromList $ map CI.mk [ ".html", ".htm", ".md", ".markdown" ]
+
+-------------------------------------------------------------------------------
+-- Page Tree.
+-------------------------------------------------------------------------------
+
+-- | Tree of the pages that need to exist in Confluence.
+type PageTree = Tree PageReference
+
+-- | Zipper focused at a page.
+type PageZipper = TreePos Full PageReference
+
+data PageReference = PageReference {
+  -- Where this is actually rooted.
+  sitePosition'    :: SiteFileZipper
+  -- Where the contents of this page are located.
+  -- This can differ from the site position in the case of 
+  -- a directory (e.g. /foo and /foo/README.md are merged to become /foo).
+  -- Where this occurs a shadow reference is created in its place.
+, pageSource'      :: Maybe SiteFileZipper
+-- A shadow reference exists where the page is actually merged with another
+-- (but the reference is included to allow easy lookups).
+} | ShadowReference PageReference 
+  deriving (Eq, Show)
+
+notShadowReference :: PageReference -> Bool
+notShadowReference (ShadowReference _) = False
+notShadowReference (PageReference _ _) = True
+
+sitePosition :: PageReference -> SiteFileZipper
+sitePosition PageReference { sitePosition' } = sitePosition'
+sitePosition (ShadowReference ref) = fromJust $ pageSource' ref
+
+pageSource :: PageReference -> Maybe SiteFileZipper
+pageSource PageReference { pageSource' } = pageSource'
+pageSource (ShadowReference ref) = pageSource' ref
+
+pageName :: String -> PageZipper -> String
+pageName syncTitle page =
+  if (isRoot page) 
+    then syncTitle
+    else title ++ " (" ++ uniqueTitlePath ++ ")"
+  where pagePath = filePath . label . sitePosition . label $ page
+        title = prettifyPageName . takeBaseName $ pagePath
+        rootPath = filePath . label . sitePosition . label . root $ page
+        pathElements = map prettifyPageName $ filter (/= ".") (splitDirectories $ makeRelative rootPath (takeDirectory pagePath))
+        uniqueTitlePath = if (null pathElements) then syncTitle else (intercalate " / " pathElements) ++ " - " ++ syncTitle
+
+-- If the PageReference is Just - it means the current page is actually a shadow reference to another page.
+mkPageReference :: (SiteFileZipper, Maybe PageReference) -> (PageReference, [ (SiteFileZipper, Maybe PageReference) ])
+mkPageReference (zipper, shadowReference) = 
+  case shadowReference of
+    Just reference -> (ShadowReference reference, [])
+    Nothing ->
+      let siteFile        = label zipper
+          isDirectory'    = isDirectory siteFile
+          -- Content pages are naturally confluence pages (e.g. markdown or HTML)
+          -- A directory is also a page IFF it has actual content pages below it.
+          -- We exclude any directories that have no descendant pages.
+          isZipperAPage p = (isSiteFileAPage . label $ p) || (isDirectory' && zipperHasDescendantPages p)
+          zipperHasDescendantPages = any (isSiteFileAPage . label) . traverseZipper
+          pageChildren    = filter isZipperAPage (traverseChildren zipper)
+          pageSource      = if (isDirectory') then (findDirectoryPage pageChildren) else (Just zipper)
+          reference       = PageReference zipper pageSource
+          pageChildren'   = map (\c -> (c, if ((Just c) == pageSource) then (Just reference) else Nothing)) pageChildren
+      in (reference, pageChildren')
+
+findDirectoryPage :: [ SiteFileZipper ] -> Maybe SiteFileZipper
+findDirectoryPage zippers = do
+  (check "readme") <|> (check "index")
+  where 
+        zipperFilename = takeBaseName . filePath . label
+        check fileName = find ((== fileName) . CI.mk . zipperFilename) zippers
+
+-- | Builds a site tree from the root element.
+buildPageTree :: SiteTree -> PageTree
+buildPageTree siteTree =
+  unfoldTree buildTree (rootZipper, Nothing)
+  where rootZipper = fromTree siteTree
+        buildTree :: (SiteFileZipper, Maybe PageReference) -> (PageReference, [ (SiteFileZipper, Maybe PageReference) ])
+        buildTree = mkPageReference
+
+traverseChildren :: TreePos Full a -> [ TreePos Full a ]
+traverseChildren zipper = 
+  maybe [] traverseSiblings (firstChild zipper)
+  where traverseSiblings :: TreePos Full b -> [ TreePos Full b ]
+        traverseSiblings z = case (next z) of
+          Just continue -> z : (traverseSiblings continue)
+          Nothing       -> [ z ]
+
+traverseZipper :: TreePos Full a -> [ TreePos Full a ]
+traverseZipper zipper = 
+  zipper : ((traverseChildren zipper) >>= traverseZipper)
+
+-------------------------------------------------------------------------------
+-- Page/Element Functions.
+-------------------------------------------------------------------------------
+
+-- | Takes the filename of a page and sanitizes it for a Confluence page name.
+--   Basically removes common symbols and capitalises each word.
+prettifyPageName :: String -> String
+prettifyPageName path = (unwords . map capitaliseWord . words) $ (foldr replaceCharacter (takeBaseName path) [
+      ("-", " ")
+    , ("_", " ")
+  ])
+  where replaceCharacter :: (String, String) -> String -> String
+        replaceCharacter (needle, replaced) str = replace needle replaced str
+        capitaliseWord :: String -> String
+        capitaliseWord [] = []
+        capitaliseWord (c : cs) = toUpper c : map toLower cs
+-------------------------------------------------------------------------------
+-- Tree of Local and Remote Pages
+-------------------------------------------------------------------------------
+
+type ConfluenceTree = Tree SyncReference 
+
+type ConfluenceZipper = TreePos Full SyncReference
+
+data SyncReference = SyncReference {
+  pagePosition :: PageReference
+, remotePage   :: PageSummary
+} deriving (Show, Eq)
+
+pageTreeToSyncTree :: PageZipper -> (PageZipper -> PageSummary) -> ConfluenceTree
+pageTreeToSyncTree pageTree localToRemote =
+  unfoldTree unfold pageTree
+  where unfold :: PageZipper -> (SyncReference, [ PageZipper ])
+        unfold zipper = ((SyncReference (label zipper) (localToRemote zipper)), (traverseChildren zipper))
+
+

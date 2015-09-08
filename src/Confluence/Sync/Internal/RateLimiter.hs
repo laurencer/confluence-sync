@@ -2,7 +2,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE RecordWildCards #-}
 
-module Confluence.Sync.RateLimiter (
+module Confluence.Sync.Internal.RateLimiter (
   Throttle
 , newThrottle
 , runThrottledAction

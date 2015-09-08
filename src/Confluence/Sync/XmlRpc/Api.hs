@@ -32,7 +32,7 @@ import           Control.Monad.Reader
 import           Network.XmlRpc.Client
 import           Network.XmlRpc.Internals
 
-import           Confluence.Sync.RateLimiter
+import           Confluence.Sync.Internal.RateLimiter
 import           Confluence.Sync.XmlRpc.Requests
 import           Confluence.Sync.XmlRpc.Types
 

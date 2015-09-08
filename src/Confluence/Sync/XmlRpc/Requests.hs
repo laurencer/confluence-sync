@@ -19,7 +19,7 @@ import           Control.Monad.Reader
 import           Network.XmlRpc.Client
 import           Network.XmlRpc.Internals
 
-import           Confluence.Sync.RateLimiter
+import           Confluence.Sync.Internal.RateLimiter
 
 type ConfluenceUrl      = String
 type Token              = String
