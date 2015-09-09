@@ -27,6 +27,76 @@ import           System.FilePath
 
 import           Confluence.Sync.XmlRpc.Types
 
+{-
+
+This file contains the core data structures of the application:
+
+- SiteFile      -> SiteTree       -> SiteFileZipper
+- PageReference -> PageTree       -> PageZipper
+- SyncReference -> ConfluenceTree -> ConfluenceZipper
+
+Site File
+=========
+
+A site file represents a local file that exists within the directory being 
+synced. The reason for the data structure is to materialise whether it is a
+directory (which would otherwise require an IO action) and to capture a 
+consistent snapshot of the filesystem (because otherwise local mutations could
+introduce a class of errors that would not otherwise be present - and instead we
+simply fail when accessing a file rather than having an "incorrect" result).
+
+The site tree simply represents all the files and directories in the sync root.
+
+Page Reference
+==============
+
+Not every file in the directory generates a page, and not every page corresponds
+to a single file. For example, assets, such as images do not result in new 
+Confluence pages being created.
+
+Similarly, directories, whilst not having content
+themselves may instead be "replaced" with a README.md or README.html that is at 
+the root of the directory. E.g. for /foo - a Confluence page will be created where /foo is but with the 
+content from /foo/README.md.
+
+As a result, every page reference has a reference to its actual site file - which
+represents where it should lie in the hierarchy of pages, and a reference to where
+it should actually get its content from.
+
+In the event a directory uses a file's contents - then instead of creating the file,
+a shadow reference is generated instead. This allows us to detect that the page's
+contents have already been rendered and we only render the page once. For example,
+if we have /foo from the example above (with content from /foo/README.md), we don't
+also want to separately render the same content at /foo/README.md.
+
+The shadow reference is useful however for resolving links and other paths because we
+can look it up based on the page reference (e.g. a link to /foo/README.html can be 
+redirected to /foo based on the shadow reference).
+
+Sync Reference
+==============
+
+A sync reference pairs an actual page on Confluence (e.g. with its id, url and 
+related data) with a Page Reference. Once we have both of these, we can resolve
+links between pages and provide more of the advanced functionality.
+
+Only actual page references (not shadow references) have a sync reference entry.
+
+Zippers
+=======
+
+All of the aforementioned data structures form trees logically - whether its 
+Confluence page hierarchies or folders/files on the file system.
+
+The reason zippers are used is to allow lookups and references based on the 
+position of a page or file in the hierarchy.
+
+For example, it allows a page to quickly ascertain the Confluence page id of its
+parent to ensure that it is positioned correctly. Similarly, it allows for relative
+lookups based on links (e.g. ../bar.img can resolve based on the parents location).
+
+-}
+
 -------------------------------------------------------------------------------
 -- Site Tree.
 -------------------------------------------------------------------------------
