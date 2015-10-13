@@ -1,0 +1,15 @@
+cabal-dev/
+dist/
+snippet
+check
+bench
+report.html
+*.prof
+*.mem
+tags
+TAGS
+config.h
+
+.cabal-sandbox/
+cabal.config
+cabal.sandbox.config

@@ -2,7 +2,7 @@
 
 > ***Confluence Sync Tool*** lets you author content on your local machine in either HTML or Markdown and then synchronise it to Confluence.
 
-Ever wanted to write Markdown or use a static site tool to author Confluence Content? Well now you can! 
+Ever wanted to write Markdown or use a static site tool to author Confluence Content? Well now you can!
 
 This tool takes a static HTML site (or Markdown content) and syncs it to a Confluence Space. Simply point it at your directory of Markdown content (or the output of a tool like Jekyll) and it will make it available as a set of Confluence pages.
 
@@ -15,12 +15,12 @@ Run `stack install` and ensure that `~/.local/bin` is added to your path.
 ## Using the Tool
 
     confluence-sync-tool - syncs HTML/Markdown content to Confluence
-    
+
     Usage: confluence-sync-tool --space-id <SPACE ID> --page-name <PAGE TITLE>
                                 [--page-id <PAGE ID>] <SYNC DIRECTORY>
       Synchronises all of the pages in the sync-directory to the given space and
       places them all under the specified page.
-    
+
     Available options:
       -h,--help                Show this help text
       --space-id <SPACE ID>    The id of the Confluence Space to synchronise with
@@ -46,9 +46,9 @@ Run `stack install` and ensure that `~/.local/bin` is added to your path.
                                made. (default: 10000 reqs)
       <SYNC DIRECTORY>         Directory containing the website/content to sync to
                                Confluence
-    
+
     Expects the following environment variables to be set:
-    
+
     CONFLUENCE_URL="confluence server address" (e.g. `http://192.168.99.100:8090/`)
     CONFLUENCE_USER="confluence username"      (e.g. `admin`)
     CONFLUENCE_PASSWORD="confluence password"  (e.g. `password123`)
@@ -115,6 +115,21 @@ The current version of `haxr` is incompatible with the Confluence XML-RPC API be
 
 Until this gets fixed in master - it is included as a vendor dependency. See [haxr#12](https://github.com/byorgey/haxr/pull/12) for more information.
 
+
+**Why is `http-streams` included as a vendor dependency?**
+
+The current version of `http-streams` does not provide any way to customise the
+timeout for socket/HTTP operations. This can cause the sync tool to timeout
+when working with slow Confluence servers.
+
+Until the API is improved, and timeouts are exposed to the application layer
+(via Haxr as well), a custom version is included that fixes the send/receive
+timeouts to `60 seconds` (which should be enough for even the slowest
+instances).
+
+Until this gets fixed in master - it is included as a vendor dependency.
+See [http-streams#93](https://github.com/afcowie/http-streams/issues/93) for more information.
+
 **Will you maintain this tool? Is it supported? Should I rely on it?**
 
 > **TL;DR** use at your own risk (though the risk should be minimal).
@@ -122,5 +137,3 @@ Until this gets fixed in master - it is included as a vendor dependency. See [ha
 The tool is open-source and all of the content is authored in open formats (HTML, Markdown, etc). However - admittedly the manual editing experience of synced content within Confluence is not great (since everything is wrapped in the HTML Macro - though this may improve in future versions of the tool).
 
 As with all weekend projects, I can't promise any on-going support or maintainence of the tool. I will try and keep it up to date and make improvements as long as I have to use Confluence, but beyond that it is open-source. Feel free to fork or contribute (via pull requests) if you find a bug or want a new feature!
-
-

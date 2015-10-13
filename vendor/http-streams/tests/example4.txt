@@ -1,0 +1,6 @@
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 86     
+
+This is an HTTP response with a header that has trailing whitespace. Bad
+server, Bad!

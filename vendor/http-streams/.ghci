@@ -1,0 +1,4 @@
+:set -XOverloadedStrings
+:set +m
+:set -isrc:tests
+:set -I.

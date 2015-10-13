@@ -1,0 +1,4 @@
+GET /resource/42 HTTP/1.1
+Host: localhost
+Accept: text/html
+
