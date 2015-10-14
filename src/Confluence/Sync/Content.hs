@@ -8,8 +8,6 @@
 
 module Confluence.Sync.Content where
 
-import           CMark
-
 import           Data.Char
 import           Data.List
 import           Data.Maybe
@@ -23,13 +21,15 @@ import qualified Data.Text.IO as TIO
 import           Data.Tree
 import           Data.Tree.Zipper
 
-import           Data.CaseInsensitive  ( CI )
+import           Data.CaseInsensitive   (CI)
 import qualified Data.CaseInsensitive as CI
 
 import           Text.XML.HXT.Core
 import           Text.HandsomeSoup
 import           Text.Heredoc
 import           Text.InterpolatedString.Perl6 (qq)
+import           Text.Pandoc
+import           Text.Pandoc.Options
 
 import           System.Directory
 import           System.FilePath
@@ -40,24 +40,34 @@ import           Confluence.Sync.XmlRpc.Types
 import           Confluence.Sync.Internal.AttachmentHash
 
 getPageAsRawHtml :: ConfluenceZipper -> IO T.Text
-getPageAsRawHtml zipper = 
+getPageAsRawHtml zipper =
   let siteFile  = label <$> (pageSource . pagePosition . label $ zipper)
+      -- Converts a Pandoc error and throws it in the IO monad.
+      handleParseError file = either (fail . (humaniseError file)) return
+      -- Takes an error and adds the file location (with error message).
+      humaniseError file err = "Failed to parse " ++ (filePath file) ++ " - " ++ (show err)
+      -- Convert Markdown to HTML
+      -- Note that file is not used.
+      convertToMarkdown file = do
+        source <- readFile (filePath file)
+        let pandoc' = readMarkdown def source
+        pandoc <- handleParseError file pandoc'
+        let html = writeHtmlString def {
+            writerReferenceLinks = True,
+            writerEmailObfuscation = NoObfuscation } pandoc
+        return $ T.pack html
   in case siteFile of
     -- This will occur if a directory has child pages BUT no page for itself (e.g. a README)
     Nothing   -> return ""
-    Just file -> let 
-      path      = filePath file
-      pageType  = getPageType file
-      source    = TIO.readFile path
-      in case pageType of
-        Just HtmlPage      -> source
-        Just MarkdownPage  -> wrapMarkdownHtml <$> (commonmarkToHtml [optSafe, optSmart]) <$> source
+    Just file -> case (getPageType file) of
+        Just HtmlPage      -> TIO.readFile (filePath file)
+        Just MarkdownPage  -> wrapMarkdownHtml <$> (convertToMarkdown file)
         Nothing            -> return ""
 
 data PageType = HtmlPage | MarkdownPage
 
 getPageType :: SiteFile -> Maybe PageType
-getPageType file = 
+getPageType file =
   if (hasA htmlExtensions) then Just HtmlPage
     else if (hasA markdownExtensions) then Just MarkdownPage
       else Nothing
@@ -68,7 +78,7 @@ getPageType file =
 
 
 getPageContents :: ConfluenceZipper -> [ (LocalAttachment, Attachment) ] -> IO String
-getPageContents zipper attachmentMapping = 
+getPageContents zipper attachmentMapping =
   wrapHtml <$> ((getPageAsRawHtml zipper) >>= processAttachments >>= processLinks)
   where processAttachments = rewriteAttachmentReferences referenceToUrl
           where referenceToUrl = Map.fromList $ fmap (\(l, r) -> ((localReference l), (attachmentUrl r))) attachmentMapping
@@ -77,7 +87,7 @@ getPageContents zipper attachmentMapping =
         wrapHtml contents = concat [ infoBox, prefix, contents, suffix ]
           where prefix = "<ac:macro ac:name='html'><ac:plain-text-body><![CDATA["
                 suffix = "]]></ac:plain-text-body></ac:macro>"
-          
+
 
 -------------------------------------------------------------------------------
 -- Local Attachment Handling.
@@ -110,7 +120,7 @@ mkAttachment zipper reference = do
     Just resolved ->
       let resolvedPath = filePath . label $ resolved
           extension    = CI.mk . takeExtension $ resolvedPath
-      in if (Set.member extension validExtensions) 
+      in if (Set.member extension validExtensions)
             then (\rn -> Just $ LocalAttachment reference resolved rn) <$> (localAttachmentRemoteName resolved)
             else return Nothing
 
@@ -155,8 +165,8 @@ rewriteAttachmentReferences referenceToUrl html =
       replaceLinkedResources = processAttrl (modifyAttribute "href" updateReference) `when` isSiteLinkedResource
       replaceImages = processAttrl (modifyAttribute "src" updateReference) `when` isSiteImage
       replaceScripts = processAttrl (modifyAttribute "src" updateReference) `when` isSiteScript
-      parseAndReplace = runX $ doc >>> 
-        (processTopDown replaceLinks) 
+      parseAndReplace = runX $ doc >>>
+        (processTopDown replaceLinks)
         >>> (processTopDown replaceImages)
         >>> (processTopDown replaceLinkedResources)
         >>> (processTopDown replaceScripts)
@@ -174,7 +184,7 @@ rewriteLinks zipper html =
       findPage ref = (pageSummaryUrl . remotePage . label) <$> (resolvePageLink zipper ref)
       updateReference reference = maybe reference id (findPage reference)
       replaceLinks = processAttrl (modifyAttribute "href" updateReference) `when` isSiteLink
-      parseAndReplace = runX $ doc >>> 
+      parseAndReplace = runX $ doc >>>
         processTopDown replaceLinks
         >>> writeDocumentToString [ withOutputEncoding isoLatin1 ]
   in concat <$> parseAndReplace
@@ -864,6 +874,10 @@ githubCss = [here|
   z-index: 1;
   position: relative;
   border-color: #4078c0;
+}
+
+.markdown-body .caption {
+  display: none;
 }
 </style>
 |]
