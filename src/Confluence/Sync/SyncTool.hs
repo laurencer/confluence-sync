@@ -54,12 +54,12 @@ data ConfluenceConfig = ConfluenceConfig {
 } deriving Show
 
 -- Address of the XML-RPC Api root
-confluenceXmlApi :: ConfluenceConfig -> String 
+confluenceXmlApi :: ConfluenceConfig -> String
 confluenceXmlApi config = (confluenceUrl config) ++ "/rpc/xmlrpc"
 
 createRootPage :: ConfluenceConfig -> ApiCall Page
 createRootPage (ConfluenceConfig { syncSpaceKey, syncTitle }) = do
-  let newRootPage = NewPage { 
+  let newRootPage = NewPage {
       newPageSpace        = syncSpaceKey
     , newPageParentId     = Nothing
     , newPageTitle        = syncTitle
@@ -99,7 +99,7 @@ createMetaPages config rootPage = do
   return (metaPage, trashPage)
 
 metaPageName :: ConfluenceConfig -> String
-metaPageName (ConfluenceConfig { syncTitle }) = "Meta (" ++ syncTitle ++ ")"
+metaPageName (ConfluenceConfig { syncTitle }) = "Misc"
 
 createOrFindMetaPage :: ConfluenceConfig -> Page -> ApiCall Page
 createOrFindMetaPage (config@ConfluenceConfig { syncSpaceKey }) (rootPage@Page { pageId = rootPageId, pageTitle = rootPageTitle }) = do
@@ -108,8 +108,8 @@ createOrFindMetaPage (config@ConfluenceConfig { syncSpaceKey }) (rootPage@Page {
   -- If the pages are not in the correct location - we require the user to manually move them.
   -- It means that someone has come in manually and moved them. The user should verify what has happened
   -- (we don't want to cause data loss or break something).
-  if ((pageParentId page) /= rootPageId) 
-    then throwError $ "Metadata page (id = " ++ (pageId page) ++ ", name =\"" ++ pageTitle ++ "\") is not under the root page (id = " ++ rootPageId ++ ",name = \"" ++ rootPageTitle ++ "\"). Please move it to the correct location." 
+  if ((pageParentId page) /= rootPageId)
+    then throwError $ "Metadata page (id = " ++ (pageId page) ++ ", name =\"" ++ pageTitle ++ "\") is not under the root page (id = " ++ rootPageId ++ ",name = \"" ++ rootPageTitle ++ "\"). Please move it to the correct location."
     else return ()
   return page
   where pageTitle = metaPageName config
@@ -119,7 +119,7 @@ createOrFindMetaPage (config@ConfluenceConfig { syncSpaceKey }) (rootPage@Page {
           return page
         createMetaPage = do
           liftIO . putStrLn $ "Could not find page with name \"" ++ pageTitle ++ "\" (in space \"" ++ syncSpaceKey ++ "\"). Creating new page..."
-          let newMetaPage = NewPage { 
+          let newMetaPage = NewPage {
               newPageSpace        = syncSpaceKey
             , newPageParentId     = Just rootPageId
             , newPageTitle        = pageTitle
@@ -132,7 +132,7 @@ createOrFindMetaPage (config@ConfluenceConfig { syncSpaceKey }) (rootPage@Page {
           return newPage
 
 metaTrashPageName :: ConfluenceConfig -> String
-metaTrashPageName (ConfluenceConfig { syncTitle }) = "Meta / Trash (" ++ syncTitle ++ ")"
+metaTrashPageName (ConfluenceConfig { syncTitle }) = "Trash"
 
 createOrFindMetaTrashPage :: ConfluenceConfig -> Page -> ApiCall Page
 createOrFindMetaTrashPage (config@ConfluenceConfig { syncSpaceKey }) (metaPage@Page { pageId = metaPageId, pageTitle = metaPageTitle }) = do
@@ -141,8 +141,8 @@ createOrFindMetaTrashPage (config@ConfluenceConfig { syncSpaceKey }) (metaPage@P
   -- If the pages are not in the correct location - we require the user to manually move them.
   -- It means that someone has come in manually and moved them. The user should verify what has happened
   -- (we don't want to cause data loss or break something).
-  if ((pageParentId page) /= metaPageId) 
-    then throwError $ "Trash page (id = " ++ (pageId page) ++ ", name =\"" ++ pageTitle ++ "\") is not under the meta page (id = " ++ metaPageId ++ ",name = \"" ++ metaPageTitle ++ "\"). Please move it to the correct location." 
+  if ((pageParentId page) /= metaPageId)
+    then throwError $ "Trash page (id = " ++ (pageId page) ++ ", name =\"" ++ pageTitle ++ "\") is not under the meta page (id = " ++ metaPageId ++ ",name = \"" ++ metaPageTitle ++ "\"). Please move it to the correct location."
     else return ()
   return page
   where pageTitle = metaTrashPageName config
@@ -152,7 +152,7 @@ createOrFindMetaTrashPage (config@ConfluenceConfig { syncSpaceKey }) (metaPage@P
           return page
         createTrashPage = do
           liftIO . putStrLn $ "Could not find page with name \"" ++ pageTitle ++ "\" (in space \"" ++ syncSpaceKey ++ "\"). Creating new page..."
-          let newMetaPage = NewPage { 
+          let newMetaPage = NewPage {
               newPageSpace        = syncSpaceKey
             , newPageParentId     = Just metaPageId
             , newPageTitle        = pageTitle
@@ -172,7 +172,7 @@ createOrFindMetaTrashPage (config@ConfluenceConfig { syncSpaceKey }) (metaPage@P
 --   These pages will be subsequently updated below.
 createContentPage :: Page -> String -> ApiCall Page
 createContentPage (Page { pageId = rootPageId, pageSpace }) title = do
-  let newPage = NewPage { 
+  let newPage = NewPage {
       newPageSpace        = pageSpace
     , newPageParentId     = Just rootPageId
     , newPageTitle        = title
@@ -212,7 +212,7 @@ syncAttachments pageId localAttachments remoteAttachments = do
   let localRemotesNamesWithLocals = zip localRemoteNames localAttachments
   let nameToLocal = Map.fromList $ localRemotesNamesWithLocals
   let nameToRemote = Map.fromList $ zip (fmap attachmentFileName remoteAttachments) remoteAttachments
-  
+
   let localSet = Set.fromList $ localRemoteNames
   let remoteSet = Set.fromList $ (fmap attachmentFileName remoteAttachments)
   let completeSet = localSet `Set.union` remoteSet
@@ -341,7 +341,7 @@ sync throttle config path = do
       let allRemotePages = remotePages ++ createdPageSummaries ++ [ (pageSummaryFromPage rootPage) ]
       let allRemotePagesMap = Map.fromList $ zip (map pageSummaryTitle allRemotePages) allRemotePages
       let localToRemoteLookup local = Map.findWithDefault (error $ "Could not find remote page for local file - expected \"" ++ (pageName (syncTitle config) local) ++ "\":" ++ show local) (pageName (syncTitle config) local) allRemotePagesMap
-        
+
       let syncTree = pageTreeToSyncTree pageZipper localToRemoteLookup
       let syncZipper = fromTree syncTree
 
