@@ -12,65 +12,78 @@ import           Confluence.Sync.SyncTool
 import           Confluence.Sync.Internal.RateLimiter
 
 data CommandLineArguments = CommandLineArguments {
-  argsSpaceKey        :: String
-, argsPageTitle       :: String
-, argsPageId          :: Maybe String
-, argsActionMinDelay  :: Int
-, argsActionMaxDelay  :: Int
-, argsRequestBackoff  :: Rational
-, argsActionLimit     :: Int
-, argsSyncDirectory   :: String
+  argsSpaceKey          :: String
+, argsPageTitle         :: String
+, argsPageId            :: Maybe String
+, argsRequestTimeout    :: Int
+, argsActionMinDelay    :: Int
+, argsActionMaxDelay    :: Int
+, argsRequestBackoff    :: Rational
+, argsActionLimit       :: Int
+, argsDeleteAttachments :: Bool
+, argsSyncDirectory     :: String
 }
 
 commandLineArguments :: Parser CommandLineArguments
-commandLineArguments = CommandLineArguments 
-   <$> strOption 
+commandLineArguments = CommandLineArguments
+   <$> strOption
           (long "space-id"
-        <> metavar "<SPACE ID>" 
+        <> metavar "<SPACE ID>"
         <> help "The id of the Confluence Space to synchronise with (typically in the URL `/display/<space id>/<page name>`)." )
    <*> strOption
-          (long "page-name" 
-        <> metavar "<PAGE TITLE>" 
+          (long "page-name"
+        <> metavar "<PAGE TITLE>"
         <> help "The name of the page that all content should be synced under." )
-   <*> (optional $ strOption 
-          (long "page-id" 
-        <> metavar "<PAGE ID>" 
+   <*> (optional $ strOption
+          (long "page-id"
+        <> metavar "<PAGE ID>"
         <> help "Optional page id of the sync page (the id is usually found when editing the page in the URL `/pages/editpage.action?pageId=<page id>`)" ))
    <*> ((option auto)
-          (long "min-delay-between-requests" 
-        <> metavar "<DELAY IN MILLIS>" 
+          (long "http-request-timeout"
+        <> metavar "<TIMEOUT IN MILLIS>"
+        <> help "Maximum amount of time to wait for an HTTP request to complete/return."
+        <> (value 15000)
+        <> hidden
+        <> (showDefaultWith (\ms -> (show ms) ++ " ms"))))
+   <*> ((option auto)
+          (long "min-delay-between-requests"
+        <> metavar "<DELAY IN MILLIS>"
         <> help "Minimum time to wait between each API request in milliseconds."
         <> (value 2000)
         <> hidden
         <> (showDefaultWith (\ms -> (show ms) ++ " ms"))))
    <*> ((option auto)
-          (long "max-delay-between-requests" 
-        <> metavar "<DELAY IN MILLIS>" 
+          (long "max-delay-between-requests"
+        <> metavar "<DELAY IN MILLIS>"
         <> help "Maximum time to wait between each API request in milliseconds."
         <> (value 60000)
         <> hidden
         <> (showDefaultWith (\ms -> (show ms) ++ " ms"))))
    <*> ((option auto)
-          (long "request-backoff" 
-        <> metavar "<MULTIPLIER>" 
+          (long "request-backoff"
+        <> metavar "<MULTIPLIER>"
         <> help "Multiplier for the API request time to calculate the delay before starting next action."
         <> (value (3 / 2))
         <> hidden
         <> (showDefaultWith (\ms -> "(" ++ (show ms) ++ ") x"))))
    <*> ((option auto)
-          (long "max-number-of-requests" 
-        <> metavar "<MAX # of REQUESTS>" 
+          (long "max-number-of-requests"
+        <> metavar "<MAX # of REQUESTS>"
         <> help "Maximum number of API requests that are allowed to be made."
         <> (value 10000)
         <> hidden
         <> (showDefaultWith (\c -> (show c) ++ " reqs"))))
-   <*> argument str 
-          (metavar "<SYNC DIRECTORY>" 
+   <*> ((option auto)
+          (long "delete-attachments"
+        <> help "If set - attachments will be deleted if they are no longer needed."
+        <> (value False)))
+   <*> argument str
+          (metavar "<SYNC DIRECTORY>"
         <> help "Directory containing the website/content to sync to Confluence")
 
 main :: IO ()
 main = do
-  let opts = info (helper <*> commandLineArguments) (fullDesc 
+  let opts = info (helper <*> commandLineArguments) (fullDesc
                   <> progDesc shortProgramDescription
                   <> footer fullProgramDescription
                   <> header "confluence-sync-tool - syncs HTML/Markdown content to Confluence")
@@ -81,7 +94,7 @@ main = do
   throttle          <- newThrottle (argsActionLimit args) (argsActionMinDelay args) (argsActionMaxDelay args) (argsRequestBackoff args)
   putStrLn $ "Using Confluence URL: " ++ confluenceUrl
   putStrLn $ "Using user: " ++ username
-  let config = ConfluenceConfig username password confluenceUrl (argsPageTitle args) (argsSpaceKey args) (argsPageId args)
+  let config = ConfluenceConfig username password confluenceUrl (argsPageTitle args) (argsSpaceKey args) (argsPageId args) (argsDeleteAttachments args)
   sync throttle config (argsSyncDirectory args)
   return ()
 

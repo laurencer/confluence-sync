@@ -18,7 +18,8 @@ import           Control.Monad.Reader
 
 import           Data.Char
 import           Data.String.Utils
-import           Data.List (intercalate)
+import           Data.List (break, intercalate, nubBy, find, foldl', sortOn, (\\))
+import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Maybe
 import           Data.Set (Set)
@@ -26,6 +27,7 @@ import qualified Data.Set as Set
 import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 import           Data.Tree.Zipper
+import           Data.Tuple (swap)
 import qualified Data.ByteString as BS
 import           Data.MIME.Types
 
@@ -51,15 +53,17 @@ data ConfluenceConfig = ConfluenceConfig {
   -- Id of the page to use as the sync base.
 , syncSpaceKey  :: String
 , syncPageId    :: Maybe String
+  -- Whether to automatically delete page attachments.
+, shouldDeleteAttachments :: Bool
 } deriving Show
 
 -- Address of the XML-RPC Api root
-confluenceXmlApi :: ConfluenceConfig -> String 
+confluenceXmlApi :: ConfluenceConfig -> String
 confluenceXmlApi config = (confluenceUrl config) ++ "/rpc/xmlrpc"
 
 createRootPage :: ConfluenceConfig -> ApiCall Page
 createRootPage (ConfluenceConfig { syncSpaceKey, syncTitle }) = do
-  let newRootPage = NewPage { 
+  let newRootPage = NewPage {
       newPageSpace        = syncSpaceKey
     , newPageParentId     = Nothing
     , newPageTitle        = syncTitle
@@ -108,8 +112,8 @@ createOrFindMetaPage (config@ConfluenceConfig { syncSpaceKey }) (rootPage@Page {
   -- If the pages are not in the correct location - we require the user to manually move them.
   -- It means that someone has come in manually and moved them. The user should verify what has happened
   -- (we don't want to cause data loss or break something).
-  if ((pageParentId page) /= rootPageId) 
-    then throwError $ "Metadata page (id = " ++ (pageId page) ++ ", name =\"" ++ pageTitle ++ "\") is not under the root page (id = " ++ rootPageId ++ ",name = \"" ++ rootPageTitle ++ "\"). Please move it to the correct location." 
+  if ((pageParentId page) /= rootPageId)
+    then throwError $ "Metadata page (id = " ++ (pageId page) ++ ", name =\"" ++ pageTitle ++ "\") is not under the root page (id = " ++ rootPageId ++ ",name = \"" ++ rootPageTitle ++ "\"). Please move it to the correct location."
     else return ()
   return page
   where pageTitle = metaPageName config
@@ -119,7 +123,7 @@ createOrFindMetaPage (config@ConfluenceConfig { syncSpaceKey }) (rootPage@Page {
           return page
         createMetaPage = do
           liftIO . putStrLn $ "Could not find page with name \"" ++ pageTitle ++ "\" (in space \"" ++ syncSpaceKey ++ "\"). Creating new page..."
-          let newMetaPage = NewPage { 
+          let newMetaPage = NewPage {
               newPageSpace        = syncSpaceKey
             , newPageParentId     = Just rootPageId
             , newPageTitle        = pageTitle
@@ -141,8 +145,8 @@ createOrFindMetaTrashPage (config@ConfluenceConfig { syncSpaceKey }) (metaPage@P
   -- If the pages are not in the correct location - we require the user to manually move them.
   -- It means that someone has come in manually and moved them. The user should verify what has happened
   -- (we don't want to cause data loss or break something).
-  if ((pageParentId page) /= metaPageId) 
-    then throwError $ "Trash page (id = " ++ (pageId page) ++ ", name =\"" ++ pageTitle ++ "\") is not under the meta page (id = " ++ metaPageId ++ ",name = \"" ++ metaPageTitle ++ "\"). Please move it to the correct location." 
+  if ((pageParentId page) /= metaPageId)
+    then throwError $ "Trash page (id = " ++ (pageId page) ++ ", name =\"" ++ pageTitle ++ "\") is not under the meta page (id = " ++ metaPageId ++ ",name = \"" ++ metaPageTitle ++ "\"). Please move it to the correct location."
     else return ()
   return page
   where pageTitle = metaTrashPageName config
@@ -152,7 +156,7 @@ createOrFindMetaTrashPage (config@ConfluenceConfig { syncSpaceKey }) (metaPage@P
           return page
         createTrashPage = do
           liftIO . putStrLn $ "Could not find page with name \"" ++ pageTitle ++ "\" (in space \"" ++ syncSpaceKey ++ "\"). Creating new page..."
-          let newMetaPage = NewPage { 
+          let newMetaPage = NewPage {
               newPageSpace        = syncSpaceKey
             , newPageParentId     = Just metaPageId
             , newPageTitle        = pageTitle
@@ -172,7 +176,7 @@ createOrFindMetaTrashPage (config@ConfluenceConfig { syncSpaceKey }) (metaPage@P
 --   These pages will be subsequently updated below.
 createContentPage :: Page -> String -> ApiCall Page
 createContentPage (Page { pageId = rootPageId, pageSpace }) title = do
-  let newPage = NewPage { 
+  let newPage = NewPage {
       newPageSpace        = pageSpace
     , newPageParentId     = Just rootPageId
     , newPageTitle        = title
@@ -184,8 +188,8 @@ createContentPage (Page { pageId = rootPageId, pageSpace }) title = do
   liftIO . putStrLn $ "Synchronizing - created page \"" ++ title ++ "\" (\"" ++ (pageUrl page) ++ "\")"
   return page
 
-updateContentPage :: ConfluenceZipper -> ApiCall Page
-updateContentPage zipper = do
+updateContentPage :: ConfluenceConfig -> ConfluenceZipper -> ApiCall Page
+updateContentPage config zipper = do
   let pageSummary   = remotePage . label $ zipper
       pageId        = pageSummaryId pageSummary
       title         = pageSummaryTitle pageSummary
@@ -195,7 +199,7 @@ updateContentPage zipper = do
   page              <- Api.getPage pageId
   localAttachments  <- liftIO $ getAttachments zipper
   remoteAttachments <- Api.getAttachments pageId
-  attachmentMapping <- syncAttachments pageId localAttachments remoteAttachments
+  attachmentMapping <- syncAttachments config pageId localAttachments remoteAttachments
   localContents <- liftIO $ getPageContents zipper attachmentMapping
   let updatedPage = page { pageContent = localContents, pageParentId = parentPageId}
   if (page == updatedPage)
@@ -206,13 +210,13 @@ updateContentPage zipper = do
       liftIO . putStrLn $ "Synchronizing - page \"" ++ title ++ "\" update successfully: " ++ (pageUrl page)
   return page
 
-syncAttachments :: String -> [ LocalAttachment ] -> [ Attachment ] -> ApiCall [ (LocalAttachment, Attachment) ]
-syncAttachments pageId localAttachments remoteAttachments = do
+syncAttachments :: ConfluenceConfig -> String -> [ LocalAttachment ] -> [ Attachment ] -> ApiCall [ (LocalAttachment, Attachment) ]
+syncAttachments (ConfluenceConfig {shouldDeleteAttachments}) pageId localAttachments remoteAttachments = do
   let localRemoteNames = map attachmentRemoteName localAttachments
   let localRemotesNamesWithLocals = zip localRemoteNames localAttachments
   let nameToLocal = Map.fromList $ localRemotesNamesWithLocals
   let nameToRemote = Map.fromList $ zip (fmap attachmentFileName remoteAttachments) remoteAttachments
-  
+
   let localSet = Set.fromList $ localRemoteNames
   let remoteSet = Set.fromList $ (fmap attachmentFileName remoteAttachments)
   let completeSet = localSet `Set.union` remoteSet
@@ -230,12 +234,16 @@ syncAttachments pageId localAttachments remoteAttachments = do
   liftIO $ putStrLn ""
 
   -- Actual perform the actions.
-  forM (Set.toList toRemove) $ (\attachmentName -> do
-    let attachment = nameToRemote Map.! attachmentName
-    liftIO $ putStrLn $ "Removing attachment " ++ attachmentName
-    Api.removeAttachment (attachmentPageId attachment) attachmentName
-    liftIO $ putStrLn $ "Attachment removed: " ++ attachmentName
-    )
+  if shouldDeleteAttachments
+    then forM (Set.toList toRemove) $ (\attachmentName -> do
+      let attachment = nameToRemote Map.! attachmentName
+      liftIO $ putStrLn $ "Removing attachment " ++ attachmentName
+      Api.removeAttachment (attachmentPageId attachment) attachmentName
+      liftIO $ putStrLn $ "Attachment removed: " ++ attachmentName
+      )
+    else do
+      liftIO $ putStrLn "Not deleting attachments."
+      forM (Set.toList toRemove) $ (\attachmentName -> liftIO $ (putStrLn $ "Dangling attachment: " ++ attachmentName))
 
   added <- forM (Set.toList toAdd) $ (\attachmentName -> do
     let local = nameToLocal Map.! attachmentName
@@ -294,10 +302,25 @@ sync throttle config path = do
   siteTree       <- buildSiteTree path
   let pageTree    = buildPageTree siteTree
   let pageZipper  = fromTree pageTree
-  let localPages  = filter (notShadowReference . label) (traverseZipper pageZipper)
-  let localPagesWithTitles = zip (map (pageName (syncTitle config)) localPages) localPages
-  let titleToLocalPage = Map.fromList localPagesWithTitles
-  let localTitles = Set.fromList $ map fst localPagesWithTitles
+  let localPages :: [PageZipper]
+      localPages  = filter (notShadowReference . label) (traverseZipper pageZipper)
+  -- Get all the potential page titles.
+  let potentialPageTitles :: Set String
+      potentialPageTitles = Set.fromList $ localPages >>= (potentialPageNames (syncTitle config))
+  -- Get all the pages with their potential titles.
+  let localPagesWithPotentialTitles :: [(PageZipper, [String])]
+      localPagesWithPotentialTitles = zip localPages ((potentialPageNames (syncTitle config)) `fmap` localPages)
+  -- Deduplicates potential page titles within the site.
+  let flattenedPotentialPagesWithTitles :: [(PageZipper, String)]
+      flattenedPotentialPagesWithTitles = localPagesWithPotentialTitles >>= (\(page, titles) -> (\title -> (page, title)) `fmap` titles)
+  let localPagesWithUniqueTitles :: [(PageZipper, String)]
+      localPagesWithUniqueTitles = nubBy (\a b -> (snd a) == (snd b)) flattenedPotentialPagesWithTitles
+  -- Map from page to titles (sorted from most human friendly to most unique).
+  let localPagesWithTitles :: Map PageZipper [String]
+      localPagesWithTitles = (sortOn length) `Map.map` (foldl' (\m (page, title) -> Map.insertWithKey (\_ a b -> b ++ a) page [title] m) Map.empty localPagesWithUniqueTitles)
+  -- Map from title to the corresponding page.
+  let titleToLocalPage :: Map String PageZipper
+      titleToLocalPage = Map.fromList (swap `fmap` localPagesWithUniqueTitles)
 
   putStrLn "Logging into Confluence"
   token <- Api.login (confluenceXmlApi config) (user config) (password config)
@@ -313,17 +336,51 @@ sync throttle config path = do
       descendants <- Api.getDescendents (pageId rootPage)
       let remotePages = filter (\p -> not $ (isMetaPage config) (pageSummaryTitle p)) descendants
       let remoteTitles = Set.fromList $ (syncTitle config) : (map pageSummaryTitle remotePages)
-      let allTitles = (localTitles `Set.union` remoteTitles)
+
+      -- Match each remote page with a potential local page.
+      let matchedPages :: [(PageZipper, String)]
+          matchedPages = catMaybes $ ((\t -> (\p -> (p, t)) `fmap` (Map.lookup t titleToLocalPage))) `fmap` (Set.toList remoteTitles)
+
+      let possiblePageRenames :: [(String, [String])]
+          possiblePageRenames = (\(_, others) -> not (null others)) `filter` ((\(p, t) -> (t, (fst $ (== t) `break` (localPagesWithTitles Map.! p)))) `fmap` matchedPages)
+
+      -- Pages to rename.
+      -- A page rename can be done where the page doesn't already exist.
+      -- For each possible rename we need to lookup the page by name to see if it exists.
+      renames <- catMaybes <$> (forM possiblePageRenames $ (\(originalName, others) -> do
+          -- A name is optimal if it doesn't already exist.
+          -- The list of other names is sorted by order of human-friendliness.
+          optimalName <- findM (\other -> ((\_ -> Nothing) `fmap` (Api.getPageByName (syncSpaceKey config) other)) `catchError` (\_ -> return $ Just other)) others
+          return $ (\optimal -> (originalName, optimal)) `fmap` optimalName
+        ))
+
+      -- TODO: implement rename logic.
+
+      -- Pages to create.
+      -- Where we are creating a new page, we need to find the most optimal title for it.
+      let pagesToCreate = (\\) (Map.keys localPagesWithTitles) (fst `fmap` matchedPages)
+      titlesToCreate <- (Set.fromList . catMaybes) <$> (forM pagesToCreate $ (\page -> do
+          let possibleTitles = localPagesWithTitles Map.! page
+          -- A name is optimal if it doesn't already exist.
+          -- The list of other names is sorted by order of human-friendliness.
+          optimalName <- findM (\title -> ((\_ -> Nothing) `fmap` (Api.getPageByName (syncSpaceKey config) title)) `catchError` (\_ -> return $ Just title)) possibleTitles
+          return optimalName
+        ))
+
       let titlesAlreadyDeleted = Set.fromList $ map pageSummaryTitle (filter (\p -> (pageSummaryParentId p) == (pageId trashPage)) remotePages)
 
       -- Calculate the page-level actions to take.
-      let titlesToRemove = ((allTitles `Set.difference` titlesAlreadyDeleted) `Set.difference` localTitles)
-      let titlesToCreate = allTitles `Set.difference` remoteTitles
-      let titlesToUpdate = (localTitles `Set.intersection` remoteTitles) `Set.union` titlesToCreate
+      let titlesToUpdate = titlesToCreate `Set.union` (Set.fromList (snd `fmap` renames)) `Set.union` (Set.fromList (snd `fmap` matchedPages))
+
+      -- The titles to remove are all remote pages which we are not going to update, and which are not being renamed, or already deleted.
+      let titlesToRemove = (remoteTitles `Set.difference` titlesToUpdate) `Set.difference` (Set.fromList (fst `fmap` renames)) `Set.difference` titlesAlreadyDeleted
 
       -- Log the page-level actions that will be taken.
       liftIO $ putStrLn $ "Pages to create: " ++ (if (Set.null titlesToCreate) then "none." else "")
       liftIO . sequence $ map (\t -> putStrLn $ "  - " ++ show t) (Set.toList titlesToCreate)
+      liftIO $ putStrLn ""
+      liftIO $ putStrLn $ "Pages to rename: " ++ (if (null renames) then "none." else "")
+      liftIO . sequence $ map (\t -> putStrLn $ "  - " ++ t) ((\(original, updated) -> original ++ " -> " ++ updated)`fmap` renames)
       liftIO $ putStrLn ""
       liftIO $ putStrLn $ "Pages to update: " ++ (if (Set.null titlesToUpdate) then "none." else "")
       liftIO . sequence $ map (\t -> putStrLn $ "  - " ++ show t) (Set.toList titlesToUpdate)
@@ -338,14 +395,19 @@ sync throttle config path = do
 
       -- This is the complete list of all possible pages (this is used for updating/creating links between pages).
       -- The root page is added in here because it will have the same name as the root directory page.
+      -- TODO: update this to take account of renames
       let allRemotePages = remotePages ++ createdPageSummaries ++ [ (pageSummaryFromPage rootPage) ]
-      let allRemotePagesMap = Map.fromList $ zip (map pageSummaryTitle allRemotePages) allRemotePages
-      let localToRemoteLookup local = Map.findWithDefault (error $ "Could not find remote page for local file - expected \"" ++ (pageName (syncTitle config) local) ++ "\":" ++ show local) (pageName (syncTitle config) local) allRemotePagesMap
-        
+      let allRemotePagesMap :: Map String PageSummary
+          allRemotePagesMap = Map.fromList $ zip (map pageSummaryTitle allRemotePages) allRemotePages
+      let localToRemoteMap :: Map PageZipper PageSummary
+          localToRemoteMap = (\title -> titleToLocalPage Map.! title) `Map.mapKeys` allRemotePagesMap
+      let localToRemoteLookup :: PageZipper -> PageSummary
+          localToRemoteLookup local = localToRemoteMap Map.! local
+
       let syncTree = pageTreeToSyncTree pageZipper localToRemoteLookup
       let syncZipper = fromTree syncTree
 
-      sequence $ map updateContentPage (filter (notShadowReference . pagePosition . label) (traverseZipper syncZipper))
+      sequence $ map (updateContentPage config) (filter (notShadowReference . pagePosition . label) (traverseZipper syncZipper))
       sequence $ map (\title -> trashContentPage trashPage (allRemotePagesMap Map.! title)) (Set.toList titlesToRemove)
 
       ---
@@ -353,3 +415,10 @@ sync throttle config path = do
       Api.logout
       liftIO $ putStrLn "Logged out successfully."
   either (\err -> fail $ "ERROR: " ++ err) (\_ -> return ()) result
+
+findM :: Monad m => (a -> m (Maybe b)) -> [a] -> m (Maybe b)
+findM _ [] = return Nothing
+findM f (x:xs) =
+  (f x) >>= recurse
+  where recurse (Just value) = return $ Just value
+        recurse Nothing = findM f xs
