@@ -114,6 +114,7 @@ test-suite           check
                      io-streams,
                      mtl,
                      transformers,
+                     network-socket-options,
                      network >= 2.6,
                      network-uri >= 2.6,
                      openssl-streams >= 1.1    && < 1.4,

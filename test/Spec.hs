@@ -3,6 +3,7 @@
 import           Control.Exception (evaluate)
 
 import           Data.Maybe
+import           Data.List
 
 import           System.Directory
 import           System.Environment
@@ -42,18 +43,19 @@ main = do
   password      <- env "CONFLUENCE_TEST_PASSWORD"
   spaceKey      <- env "CONFLUENCE_TEST_SPACE"
   return $ (confluenceUrl, username, password, spaceKey)
-  throttle      <- newThrottle 1000 0 1000 1  
+  throttle      <- newThrottle 1000 0 1000 1
   let config = ConfluenceConfig username password confluenceUrl testSyncRoot spaceKey Nothing
   currentDirectory <- getCurrentDirectory
   sync throttle config (currentDirectory </> "test" </> "sample")
   token <- Api.login (confluenceXmlApi config) username password
-  let invokeApi call = do 
+  let invokeApi call = do
         result <- runApiCall throttle (confluenceXmlApi config) token call
         either (\err -> fail $ "ERROR: " ++ err) (return) result
   tests invokeApi spaceKey testSyncRoot
+  tests invokeApi spaceKey testSyncRoot
   invokeApi Api.logout
- 
-tests:: (ApiCall Page -> IO a)
+
+tests:: (ApiCall Page -> IO Page)
                       -> String
                       -> String
                       -> IO ()
@@ -69,14 +71,39 @@ tests call spaceKey syncRoot = hspec $ do
       call $ Api.getPageByName spaceKey [qq|Meta / Trash ({syncRoot})|]
       return ()
     it "should have a page at: About" $ do
-      call $ Api.getPageByName spaceKey [qq|About ({syncRoot})|]
+      page <- call $ Api.getPageByName spaceKey [qq|About|]
+      let content = pageContent page
+      let uniqueWord = "UNIQUEWORD_ABOUT_DO_NOT_REMOVE"
+      let correctPage = isInfixOf uniqueWord content
+      if correctPage then return () else fail ("ERROR: could not find " ++ uniqueWord ++ " in\n" ++ content)
+      return ()
+    it "should have a page at: About / Nested / About" $ do
+      page <- call $ Api.getPageByName spaceKey [qq|About (Nested)|]
+      let content = pageContent page
+      let uniqueWord = "UNIQUEWORD_ABOUT_NESTED_DO_NOT_REMOVE"
+      let correctPage = isInfixOf uniqueWord content
+      if correctPage then return () else fail ("ERROR: could not find " ++ uniqueWord ++ " in\n" ++ content)
+      return ()
+    it "should have a page at: Category / About" $ do
+      page <- call $ Api.getPageByName spaceKey [qq|About (Category)|]
+      let content = pageContent page
+      let uniqueWord = "UNIQUEWORD_ABOUT_CATEGORY_DO_NOT_REMOVE"
+      let correctPage = isInfixOf uniqueWord content
+      if correctPage then return () else fail ("ERROR: could not find " ++ uniqueWord ++ " in\n" ++ content)
+      return ()
+    it "should have a page at: Category / Nested / About" $ do
+      page <- call $ Api.getPageByName spaceKey [qq|About (Category / Nested - {syncRoot})|]
+      let content = pageContent page
+      let uniqueWord = "UNIQUEWORD_ABOUT_CATEGORY_NESTED_DO_NOT_REMOVE"
+      let correctPage = isInfixOf uniqueWord content
+      if correctPage then return () else fail ("ERROR: could not find " ++ uniqueWord ++ " in\n" ++ content)
       return ()
     it "should have a page at: Category" $ do
-      call $ Api.getPageByName spaceKey [qq|Category ({syncRoot})|]
+      call $ Api.getPageByName spaceKey [qq|Category|]
       return ()
     it "should have a page at: Category / My Nested Page" $ do
-      call $ Api.getPageByName spaceKey [qq|My Nested Page (Category - {syncRoot})|]
+      call $ Api.getPageByName spaceKey [qq|My Nested Page|]
       return ()
     it "should have a page at: Sample" $ do
-      call $ Api.getPageByName spaceKey [qq|Sample ({syncRoot})|]
+      call $ Api.getPageByName spaceKey [qq|Sample|]
       return ()
