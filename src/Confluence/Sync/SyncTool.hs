@@ -195,6 +195,9 @@ updateContentPage config renames zipper = do
       fullPath      = maybe "<root>" id $ (filePath . label) <$> (pageSource . pagePosition . label $ zipper)
       parentPageId  = maybe (pageSummaryParentId pageSummary) id ((pageSummaryId . remotePage . label) <$> (parent zipper))
   liftIO . putStrLn $ "Synchronizing - updating page \"" ++ title ++ "\" (\"" ++ fullPath ++ "\")"
+  if (title /= originalTitle)
+    then liftIO . putStrLn $ "Renaming page from \"" ++ originalTitle ++ "\" to \"" ++ title ++ "\""
+    else return ()
   page              <- Api.getPage pageId
   localAttachments  <- liftIO $ getAttachments zipper
   remoteAttachments <- Api.getAttachments pageId
@@ -331,6 +334,7 @@ sync throttle config path = do
                     Nothing     -> createOrFindPage config
       -- Create/find the meta pages.
       (metaPage, trashPage) <- createMetaPages config rootPage
+
       -- Now we have the root page get the descendants.
       descendants <- Api.getDescendents (pageId rootPage)
       let remotePages = filter (\p -> not $ (isMetaPage config) (pageSummaryTitle p)) descendants
@@ -401,8 +405,11 @@ sync throttle config path = do
       let allRemotePages = remotePages ++ createdPageSummaries ++ [ (pageSummaryFromPage rootPage) ]
       let allRemotePagesMap :: Map String PageSummary
           allRemotePagesMap = Map.fromList $ zip (map pageSummaryTitle allRemotePages) allRemotePages
+      -- Filter out remote pages that don't have a corresponding local page.
+      -- (otherwise it breaks the mapKeys below because we can't find a local page for the given title)
+      let remotePagesWithLocalPage = (Map.filterWithKey (\k _ -> Map.member k titleToLocalPage) allRemotePagesMap)
       let localToRemoteMap :: Map PageZipper PageSummary
-          localToRemoteMap = (\title -> titleToLocalPage Map.! title) `Map.mapKeys` allRemotePagesMap
+          localToRemoteMap = (\title -> titleToLocalPage Map.! title) `Map.mapKeys` remotePagesWithLocalPage
       let localToRemoteLookup :: PageZipper -> PageSummary
           localToRemoteLookup local = localToRemoteMap Map.! local
 
@@ -410,8 +417,11 @@ sync throttle config path = do
       let syncTree = pageTreeToSyncTree pageZipper localToRemoteLookup
       let syncZipper = fromTree syncTree
 
+
+
       -- Update the content of all pages (including renaming where appropriate).
-      sequence $ map (updateContentPage config renameMap) (filter (notShadowReference . pagePosition . label) (traverseZipper syncZipper))
+      let pagesToUpdate = filter (notShadowReference . pagePosition . label) (traverseZipper syncZipper)
+      sequence $ map (updateContentPage config renameMap) pagesToUpdate
 
       -- Delete any old pages.
       sequence $ map (\title -> trashContentPage trashPage (allRemotePagesMap Map.! title)) (Set.toList titlesToRemove)
