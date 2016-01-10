@@ -19,6 +19,9 @@ module Confluence.Sync.XmlRpc.Api (
 , getAttachments
 , addAttachment
 , removeAttachment
+
+, addSpace
+, removeSpace
 ) where
 
 import           Data.ByteString
@@ -75,3 +78,9 @@ addAttachment = invoke "confluence2.addAttachment"
 
 removeAttachment :: PageId -> AttachmentFileName -> ApiCall Bool
 removeAttachment = invoke "confluence2.removeAttachment"
+
+addSpace :: Space -> ApiCall Space
+addSpace = invoke "confluence2.addSpace"
+
+removeSpace :: SpaceKey -> ApiCall Bool
+removeSpace = invoke "confluence2.removeSpace"

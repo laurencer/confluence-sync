@@ -35,30 +35,47 @@ env name = do
 
 main = do
   putStrLn "Running tests..."
+  -- Generate fake pages/spaces used for testing.
   randomGen    <- newStdGen
+  let testSpace    = take 5 $ randomRs ('a','z') randomGen
   let testSyncRoot = take 10 $ randomRs ('a','z') randomGen
+
+  -- Create the configuration required.
   putStrLn $ "Using sync root: " ++ testSyncRoot
   confluenceUrl <- env "CONFLUENCE_TEST_URL"
   username      <- env "CONFLUENCE_TEST_USER"
   password      <- env "CONFLUENCE_TEST_PASSWORD"
-  spaceKey      <- env "CONFLUENCE_TEST_SPACE"
-  return $ (confluenceUrl, username, password, spaceKey)
   throttle      <- newThrottle 1000 0 1000 1
-  let config = ConfluenceConfig username password confluenceUrl testSyncRoot spaceKey Nothing
-  currentDirectory <- getCurrentDirectory
-  sync throttle config (currentDirectory </> "test" </> "sample")
+  let config = ConfluenceConfig username password confluenceUrl testSyncRoot testSpace Nothing TitleCase
+
+  -- Login to Confluence
   token <- Api.login (confluenceXmlApi config) username password
   let invokeApi call = do
         result <- runApiCall throttle (confluenceXmlApi config) token call
         either (\err -> fail $ "ERROR: " ++ err) (return) result
-  tests invokeApi spaceKey testSyncRoot
-  tests invokeApi spaceKey testSyncRoot
+
+  -- Create the space used for testing.
+  putStrLn $ "Creating space for testing: " ++ testSpace
+  space <- invokeApi . Api.addSpace $ Space testSpace testSpace Nothing Nothing Nothing
+
+  -- Perform the sync against the test space.
+  currentDirectory <- getCurrentDirectory
+  sync throttle config (currentDirectory </> "test" </> "sample")
+
+  -- Perform validation tests.
+  tests invokeApi testSpace testSyncRoot
+
+  -- Perform sync with different case handling and test behaviour.
+  let caseConfig = ConfluenceConfig username password confluenceUrl testSyncRoot testSpace Nothing PreserveIfContainsCapitals
+  sync throttle caseConfig (currentDirectory </> "test" </> "sample")
+  titleCaseTests invokeApi testSpace testSyncRoot
+
   invokeApi Api.logout
 
-tests:: (ApiCall Page -> IO Page)
-                      -> String
-                      -> String
-                      -> IO ()
+tests :: (ApiCall Page -> IO Page)
+                       -> String
+                       -> String
+                       -> IO ()
 tests call spaceKey syncRoot = hspec $ do
   describe "Sample Site" $ do
     it "should have a custom root page" $ do
@@ -107,3 +124,18 @@ tests call spaceKey syncRoot = hspec $ do
     it "should have a page at: Sample" $ do
       call $ Api.getPageByName spaceKey [qq|Sample|]
       return ()
+    it "should have a page called My Case Sensitive Page Name" $ do
+      let expectedTitle = "My Case Sensitive Page Name"
+      page <- call $ Api.getPageByName spaceKey expectedTitle
+      (pageTitle page) `shouldBe` expectedTitle
+
+titleCaseTests :: (ApiCall Page -> IO Page)
+                                -> String
+                                -> String
+                                -> IO ()
+titleCaseTests call spaceKey syncRoot = hspec $ do
+  describe "Case Preservation" $ do
+    it "a page should be created called My CASE Sensitive Page Name" $ do
+      let expectedTitle = "My CASE Sensitive Page Name"
+      page <- call $ Api.getPageByName spaceKey expectedTitle
+      (pageTitle page) `shouldBe` expectedTitle

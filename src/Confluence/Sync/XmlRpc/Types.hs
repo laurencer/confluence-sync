@@ -3,12 +3,14 @@
 module Confluence.Sync.XmlRpc.Types (
   NewPage(..)
 , Page(..)
-  
+
 , PageSummary(..)
 , pageSummaryFromPage
 
 , Attachment(..)
 , NewAttachment(..)
+
+, Space(..)
 ) where
 
 import           Prelude hiding (id)
@@ -47,7 +49,7 @@ instance XmlRpcType NewPage where
 
   getType _ = TStruct
 
-data Page = Page { 
+data Page = Page {
   pageId :: String
 , pageSpace :: String
 , pageParentId :: String
@@ -105,7 +107,7 @@ instance XmlRpcType Page where
 
   getType _ = TStruct
 
-data PageSummary = PageSummary { 
+data PageSummary = PageSummary {
   pageSummaryId :: String
 , pageSummarySpace :: String
 , pageSummaryParentId :: String
@@ -208,6 +210,33 @@ instance XmlRpcType NewAttachment where
 
   getType _ = TStruct
 
+data Space = Space {
+  spaceKey          :: String
+, spaceName         :: String
+, spaceUrl          :: Maybe String
+, spaceHomePage     :: Maybe String
+, spaceDescription  :: Maybe String
+} deriving Show
+
+instance XmlRpcType Space where
+  toValue p = toValue $ catMaybes $ map liftMaybe [
+      ("key",         Just $ toValue (spaceKey p))
+    , ("name",        Just $ toValue (spaceName p))
+    , ("url",         fmap toValue (spaceUrl p))
+    , ("homePage",    fmap toValue (spaceHomePage p))
+    , ("description", fmap toValue (spaceDescription p))
+    ]
+
+  fromValue v = do
+    t <- fromValue v
+    spaceKey          <- getField "key" t
+    spaceName         <- getField "name" t
+    spaceUrl          <- getFieldMaybe "url" t
+    spaceHomePage     <- getFieldMaybe "homePage" t
+    spaceDescription  <- getFieldMaybe "description" t
+    return Space { .. }
+
+  getType _ = TStruct
 
 -- Helper Functions
 

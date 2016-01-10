@@ -17,7 +17,6 @@ import qualified Data.List as L
 import           Data.Maybe
 import           Data.Set (Set)
 import qualified Data.Set as Set
-import           Data.String.Utils (replace)
 import           Data.Tree
 import           Data.Tree.Zipper
 
@@ -27,6 +26,7 @@ import qualified Data.CaseInsensitive as CI
 import           System.Directory
 import           System.FilePath
 
+import           Confluence.Sync.PageNames
 import           Confluence.Sync.XmlRpc.Types
 
 {-
@@ -175,8 +175,8 @@ pageSource :: PageReference -> Maybe SiteFileZipper
 pageSource PageReference { pageSource' } = pageSource'
 pageSource (ShadowReference ref) = pageSource' ref
 
-potentialPageNames :: String -> PageZipper -> [String]
-potentialPageNames syncTitle page =
+potentialPageNames :: TitleCaseConversion -> String -> PageZipper -> [String]
+potentialPageNames strategy syncTitle page =
   if (isRoot page)
     then [syncTitle] -- Always return just the sync title for the root page.
     else nub [
@@ -185,9 +185,9 @@ potentialPageNames syncTitle page =
     , title ++ " (" ++ uniqueTitlePath ++ ")" -- Completely unique path.
     ]
   where pagePath = filePath . label . sitePosition . label $ page
-        title = prettifyPageName . takeBaseName $ pagePath
+        title = (prettifyPageName strategy) . takeBaseName $ pagePath
         rootPath = filePath . label . sitePosition . label . root $ page
-        pathElements = map prettifyPageName $ filter (/= ".") (splitDirectories $ makeRelative rootPath (takeDirectory pagePath))
+        pathElements = map (prettifyPageName strategy) $ filter (/= ".") (splitDirectories $ makeRelative rootPath (takeDirectory pagePath))
         parent = if (null pathElements) then syncTitle else L.last pathElements
         uniqueTitlePath = if (null pathElements) then syncTitle else (intercalate " / " pathElements) ++ " - " ++ syncTitle
 
@@ -237,22 +237,6 @@ traverseZipper :: TreePos Full a -> [ TreePos Full a ]
 traverseZipper zipper =
   zipper : ((traverseChildren zipper) >>= traverseZipper)
 
--------------------------------------------------------------------------------
--- Page/Element Functions.
--------------------------------------------------------------------------------
-
--- | Takes the filename of a page and sanitizes it for a Confluence page name.
---   Basically removes common symbols and capitalises each word.
-prettifyPageName :: String -> String
-prettifyPageName path = (unwords . map capitaliseWord . words) $ (foldr replaceCharacter (takeBaseName path) [
-      ("-", " ")
-    , ("_", " ")
-  ])
-  where replaceCharacter :: (String, String) -> String -> String
-        replaceCharacter (needle, replaced) str = replace needle replaced str
-        capitaliseWord :: String -> String
-        capitaliseWord [] = []
-        capitaliseWord (c : cs) = toUpper c : map toLower cs
 -------------------------------------------------------------------------------
 -- Tree of Local and Remote Pages
 -------------------------------------------------------------------------------

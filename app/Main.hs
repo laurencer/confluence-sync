@@ -20,6 +20,7 @@ data CommandLineArguments = CommandLineArguments {
 , argsActionMaxDelay    :: Int
 , argsRequestBackoff    :: Rational
 , argsActionLimit       :: Int
+, argsPreserveCase      :: Bool
 , argsSyncDirectory     :: String
 }
 
@@ -72,6 +73,11 @@ commandLineArguments = CommandLineArguments
         <> (value 10000)
         <> hidden
         <> (showDefaultWith (\c -> (show c) ++ " reqs"))))
+   <*> ((option auto)
+          (long "preserve-case-if-word-contains-capitals"
+        <> help "Preserves the case of each word in a filename that contains capitals."
+        <> (value False)
+        ))
    <*> argument str
           (metavar "<SYNC DIRECTORY>"
         <> help "Directory containing the website/content to sync to Confluence")
@@ -89,7 +95,8 @@ main = do
   throttle          <- newThrottle (argsActionLimit args) (argsActionMinDelay args) (argsActionMaxDelay args) (argsRequestBackoff args)
   putStrLn $ "Using Confluence URL: " ++ confluenceUrl
   putStrLn $ "Using user: " ++ username
-  let config = ConfluenceConfig username password confluenceUrl (argsPageTitle args) (argsSpaceKey args) (argsPageId args)
+  let caseHandling = if (argsPreserveCase args) then PreserveIfContainsCapitals else TitleCase
+  let config = ConfluenceConfig username password confluenceUrl (argsPageTitle args) (argsSpaceKey args) (argsPageId args) caseHandling
   sync throttle config (argsSyncDirectory args)
   return ()
 

@@ -8,6 +8,7 @@
 module Confluence.Sync.SyncTool (
   sync
 , ConfluenceConfig(..)
+, TitleCaseConversion(..)
 , confluenceXmlApi
 ) where
 import Debug.Trace
@@ -16,6 +17,8 @@ import           Prelude hiding (readFile)
 import           Control.Monad.Except
 import           Control.Monad.Reader
 
+import           Data.CaseInsensitive   (CI)
+import qualified Data.CaseInsensitive as CI
 import           Data.Char
 import           Data.String.Utils
 import           Data.List (break, intercalate, nubBy, find, foldl', sortOn, (\\))
@@ -38,6 +41,7 @@ import           Text.Heredoc
 import           Confluence.Sync.LocalSite
 import           Confluence.Sync.Content
 import           Confluence.Sync.ReferenceResolver
+import           Confluence.Sync.PageNames
 
 import qualified Confluence.Sync.XmlRpc.Api as Api
 import           Confluence.Sync.XmlRpc.Types
@@ -53,6 +57,7 @@ data ConfluenceConfig = ConfluenceConfig {
   -- Id of the page to use as the sync base.
 , syncSpaceKey  :: String
 , syncPageId    :: Maybe String
+, titleCaseConversion :: TitleCaseConversion
 } deriving Show
 
 -- Address of the XML-RPC Api root
@@ -299,6 +304,9 @@ deletedPageMessage = [here|
 -- Sync implementation.
 -------------------------------------------------------------------------------
 
+type LocalPageTitle = String
+type RemotePageTitle = String
+
 sync :: Throttle -> ConfluenceConfig -> FilePath -> IO ()
 sync throttle config path = do
   siteTree       <- buildSiteTree path
@@ -308,20 +316,26 @@ sync throttle config path = do
       localPages  = filter (notShadowReference . label) (traverseZipper pageZipper)
   -- Get all the potential page titles.
   let potentialPageTitles :: Set String
-      potentialPageTitles = Set.fromList $ localPages >>= (potentialPageNames (syncTitle config))
+      potentialPageTitles = Set.fromList $ localPages >>= (potentialPageNames (titleCaseConversion config) (syncTitle config))
+
   -- Get all the pages with their potential titles.
   let localPagesWithPotentialTitles :: [(PageZipper, [String])]
-      localPagesWithPotentialTitles = zip localPages ((potentialPageNames (syncTitle config)) `fmap` localPages)
+      localPagesWithPotentialTitles = zip localPages ((potentialPageNames (titleCaseConversion config) (syncTitle config)) `fmap` localPages)
+
   -- Deduplicates potential page titles within the site.
-  let flattenedPotentialPagesWithTitles :: [(PageZipper, String)]
-      flattenedPotentialPagesWithTitles = localPagesWithPotentialTitles >>= (\(page, titles) -> (\title -> (page, title)) `fmap` titles)
-  let localPagesWithUniqueTitles :: [(PageZipper, String)]
-      localPagesWithUniqueTitles = nubBy (\a b -> (snd a) == (snd b)) flattenedPotentialPagesWithTitles
+  -- Note page titles are deduplicated on a case-insensitive basis.
+  let flattenedPotentialPagesWithTitles :: [(PageZipper, CI String)]
+      flattenedPotentialPagesWithTitles = localPagesWithPotentialTitles >>= (\(page, titles) -> (\title -> (page, CI.mk title)) `fmap` titles)
+
+  let localPagesWithUniqueTitles :: [(PageZipper, CI String)]
+      localPagesWithUniqueTitles = nubBy (\a b -> (snd $ a) == (snd $ b)) flattenedPotentialPagesWithTitles
+
   -- Map from page to titles (sorted from most human friendly to most unique).
-  let localPagesWithTitles :: Map PageZipper [String]
-      localPagesWithTitles = (sortOn length) `Map.map` (foldl' (\m (page, title) -> Map.insertWithKey (\_ a b -> b ++ a) page [title] m) Map.empty localPagesWithUniqueTitles)
+  let localPagesWithTitles :: Map PageZipper [CI String]
+      localPagesWithTitles = (sortOn $ length . CI.original) `Map.map` (foldl' (\m (page, title) -> Map.insertWithKey (\_ a b -> b ++ a) page [title] m) Map.empty localPagesWithUniqueTitles)
+
   -- Map from title to the corresponding page.
-  let titleToLocalPage :: Map String PageZipper
+  let titleToLocalPage :: Map (CI String) PageZipper
       titleToLocalPage = Map.fromList (swap `fmap` localPagesWithUniqueTitles)
 
   putStrLn "Logging into Confluence"
@@ -342,12 +356,24 @@ sync throttle config path = do
 
       -- Match each remote page with a potential local page.
       -- This allows us to do renames without creating/deleting excess pages.
-      let matchedPages :: [(PageZipper, String)]
-          matchedPages = catMaybes $ ((\t -> (\p -> (p, t)) `fmap` (Map.lookup t titleToLocalPage))) `fmap` (Set.toList remoteTitles)
+      -- This match is done in a case-insensitive manner.
+      let matchedPages :: [(PageZipper, RemotePageTitle, LocalPageTitle)]
+          matchedPages = catMaybes $ lookupLocalPageFromTitle `fmap` (Set.toList remoteTitles)
+            where lookupLocalPageFromTitle :: String -> Maybe (PageZipper, String, String)
+                  lookupLocalPageFromTitle = ((\t -> (\p -> (p, t, (getLocalTitle p t))) `fmap` (Map.lookup (CI.mk t) titleToLocalPage)))
+                  getLocalTitle :: PageZipper -> String -> String
+                  getLocalTitle pageZipper remoteTitle = CI.original . fromJust $ find (== (CI.mk remoteTitle)) (localPagesWithTitles Map.! pageZipper)
 
       -- Calculate the possible renames.
       let possiblePageRenames :: [(String, [String])]
-          possiblePageRenames = (\(_, others) -> not (null others)) `filter` ((\(p, t) -> (t, (fst $ (== t) `break` (localPagesWithTitles Map.! p)))) `fmap` matchedPages)
+          possiblePageRenames = hasBetterAlternativePageNames `filter` pagesWithBetterTitles
+            where pagesWithBetterTitles = ((\(p, t, _) -> (t, extractBetterTitles p t)) `fmap` matchedPages)
+                  extractBetterTitles :: PageZipper -> String -> [String]
+                  extractBetterTitles page currentTitle = CI.original <$> (fst $ break (== (CI.mk currentTitle)) (titlesForPage page))
+                  titlesForPage :: PageZipper -> [CI String]
+                  titlesForPage page = localPagesWithTitles Map.! page
+                  hasBetterAlternativePageNames :: (String, [String]) -> Bool
+                  hasBetterAlternativePageNames (current, others) = not . null $ others
 
       -- Pages to rename.
       -- A page rename can be done where the page doesn't already exist.
@@ -358,13 +384,22 @@ sync throttle config path = do
           optimalName <- findM (\other -> ((\_ -> Nothing) `fmap` (Api.getPageByName (syncSpaceKey config) other)) `catchError` (\_ -> return $ Just other)) others
           return $ (\optimal -> (originalName, optimal)) `fmap` optimalName
         ))
-      let renameMap = Map.fromList renames
+
+      -- Pages which we need to rename where the only difference is the case.
+      let extractLocalName (pageZipper, remote, local) = local
+      let differenceInCaseRenames :: [(RemotePageTitle, LocalPageTitle)]
+          differenceInCaseRenames = pairNotEqual `filter` (extractRemoteAndLocal <$> matchedPages)
+            where extractRemoteAndLocal (_, remote, local) = (remote, local)
+                  pairNotEqual (a, b) = a /= b
+
+      -- Generate the combined map of renames
+      let renameMap = Map.fromList (renames ++ differenceInCaseRenames)
 
       -- Pages to create.
       -- Where we are creating a new page, we need to find the most optimal title for it.
-      let pagesToCreate = (\\) (Map.keys localPagesWithTitles) (fst `fmap` matchedPages)
+      let pagesToCreate = (\\) (Map.keys localPagesWithTitles) ((\(a, _, _) -> a) `fmap` matchedPages)
       titlesToCreate <- (Set.fromList . catMaybes) <$> (forM pagesToCreate $ (\page -> do
-          let possibleTitles = localPagesWithTitles Map.! page
+          let possibleTitles = CI.original <$> (localPagesWithTitles Map.! page)
           -- A name is optimal if it doesn't already exist.
           -- The list of other names is sorted by order of human-friendliness.
           optimalName <- findM (\title -> ((\_ -> Nothing) `fmap` (Api.getPageByName (syncSpaceKey config) title)) `catchError` (\_ -> return $ Just title)) possibleTitles
@@ -374,17 +409,17 @@ sync throttle config path = do
       let titlesAlreadyDeleted = Set.fromList $ map pageSummaryTitle (filter (\p -> (pageSummaryParentId p) == (pageId trashPage)) remotePages)
 
       -- Calculate the page-level actions to take.
-      let titlesToUpdate = titlesToCreate `Set.union` (Set.fromList (snd `fmap` renames)) `Set.union` (Set.fromList (snd `fmap` matchedPages))
+      let titlesToUpdate = titlesToCreate `Set.union` (Set.fromList (snd `fmap` renames)) `Set.union` (Set.fromList (extractLocalName `fmap` matchedPages))
 
       -- The titles to remove are all remote pages which we are not going to update, and which are not being renamed, or already deleted.
-      let titlesToRemove = (remoteTitles `Set.difference` titlesToUpdate) `Set.difference` (Set.fromList (fst `fmap` renames)) `Set.difference` titlesAlreadyDeleted
+      let titlesToRemove = (remoteTitles `Set.difference` titlesToUpdate) `Set.difference` (Map.keysSet renameMap) `Set.difference` titlesAlreadyDeleted
 
       -- Log the page-level actions that will be taken.
       liftIO $ putStrLn $ "Pages to create: " ++ (if (Set.null titlesToCreate) then "none." else "")
       liftIO . sequence $ map (\t -> putStrLn $ "  - " ++ show t) (Set.toList titlesToCreate)
       liftIO $ putStrLn ""
-      liftIO $ putStrLn $ "Pages to rename: " ++ (if (null renames) then "none." else "")
-      liftIO . sequence $ map (\t -> putStrLn $ "  - " ++ t) ((\(original, updated) -> original ++ " -> " ++ updated)`fmap` renames)
+      liftIO $ putStrLn $ "Pages to rename: " ++ (if (Map.null renameMap) then "none." else "")
+      liftIO . sequence $ map (\t -> putStrLn $ "  - " ++ t) ((\(original, updated) -> original ++ " -> " ++ updated) `fmap` (Map.toList renameMap))
       liftIO $ putStrLn ""
       liftIO $ putStrLn $ "Pages to update: " ++ (if (Set.null titlesToUpdate) then "none." else "")
       liftIO . sequence $ map (\t -> putStrLn $ "  - " ++ show t) (Set.toList titlesToUpdate)
@@ -407,17 +442,15 @@ sync throttle config path = do
           allRemotePagesMap = Map.fromList $ zip (map pageSummaryTitle allRemotePages) allRemotePages
       -- Filter out remote pages that don't have a corresponding local page.
       -- (otherwise it breaks the mapKeys below because we can't find a local page for the given title)
-      let remotePagesWithLocalPage = (Map.filterWithKey (\k _ -> Map.member k titleToLocalPage) allRemotePagesMap)
+      let remotePagesWithLocalPage = (Map.filterWithKey (\k _ -> Map.member (CI.mk k) titleToLocalPage) allRemotePagesMap)
       let localToRemoteMap :: Map PageZipper PageSummary
-          localToRemoteMap = (\title -> titleToLocalPage Map.! title) `Map.mapKeys` remotePagesWithLocalPage
+          localToRemoteMap = (\title -> titleToLocalPage Map.! (CI.mk title)) `Map.mapKeys` remotePagesWithLocalPage
       let localToRemoteLookup :: PageZipper -> PageSummary
           localToRemoteLookup local = localToRemoteMap Map.! local
 
       -- Create the tree of pages to sync (and the zipper on that tree).
       let syncTree = pageTreeToSyncTree pageZipper localToRemoteLookup
       let syncZipper = fromTree syncTree
-
-
 
       -- Update the content of all pages (including renaming where appropriate).
       let pagesToUpdate = filter (notShadowReference . pagePosition . label) (traverseZipper syncZipper)
