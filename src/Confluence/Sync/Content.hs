@@ -45,23 +45,30 @@ getPageAsRawHtml zipper =
       -- Converts a Pandoc error and throws it in the IO monad.
       handleParseError file = either (fail . (humaniseError file)) return
       -- Takes an error and adds the file location (with error message).
-      humaniseError file err = "Failed to parse " ++ (filePath file) ++ " - " ++ (show err)
+      humaniseError file err = "Failed to parse " <> (filePath file) <> " - " <> (show err)
       -- Convert Markdown to HTML
       -- Note that file is not used.
       convertToMarkdown file = do
-        source <- readFile (filePath file)
-        let pandoc' = readMarkdown def source
-        pandoc <- handleParseError file pandoc'
-        let html = writeHtmlString def {
-            writerReferenceLinks = True,
-            writerEmailObfuscation = NoObfuscation } pandoc
-        return $ T.pack html
+        source <- TIO.readFile (filePath file)
+        mdResult0 <- runIO (readMarkdown def source)
+        mdResult <- handleParseError file mdResult0
+        html <-
+              runIOorExplode
+              $ writeHtml5String
+                (def {
+                  writerReferenceLinks = True
+                , writerEmailObfuscation = NoObfuscation
+                })
+                mdResult
+        return html
   in case siteFile of
     -- This will occur if a directory has child pages BUT no page for itself (e.g. a README)
     Nothing   -> return ""
     Just file -> case (getPageType file) of
         Just HtmlPage      -> TIO.readFile (filePath file)
-        Just MarkdownPage  -> wrapMarkdownHtml <$> (convertToMarkdown file)
+        Just MarkdownPage  -> do
+          html <- convertToMarkdown file
+          return (wrapMarkdownHtml html)
         Nothing            -> return ""
 
 data PageType = HtmlPage | MarkdownPage

@@ -1,10 +1,7 @@
 flags: {}
 packages:
 - '.'
-- 'vendor/haxr'
-- 'vendor/http-streams'
 extra-deps:
-- 'doctest-0.10.0'
-- 'rosezipper-0.2'
-- 'network-socket-options-0.2.0.1'
-resolver: lts-3.4
+  - haxr-3000.11.3.1@sha256:83b3de269664a57e3aa5fda58bd7fee242d8d2dcc6296d823de34e128ee988a5,2517
+  - HaXml-1.25.5@sha256:4f8534cda290b3d0a76b4ca5c4b9aa20902dcf029ddd50998d07c5dd608ad6f6,4420
+resolver: lts-14.20
